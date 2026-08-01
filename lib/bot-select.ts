@@ -18,6 +18,8 @@ export const botSelect = {
   aiModelPath: true,
   hetznerServerIp: true,
   apiServerUsername: true,
+  status: true,
+  lastError: true,
   trainingMode: true,
   createdAt: true,
   trainingJobs: {

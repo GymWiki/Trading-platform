@@ -170,14 +170,20 @@ interface CloudInitParams {
   apiServerUsername: string;
   apiServerPassword: string;
   apiServerJwtSecret: string;
+  /** POST /api/bots/[id]/status on this deployment — lets the running instance report retraining/error events back. */
+  statusWebhookUrl: string;
+  /** One-time bearer token for the above, hashed and stored as BotConfiguration.statusWebhookTokenHash. */
+  statusWebhookToken: string;
 }
 
 // Builds a cloud-init script that installs Docker, writes the strategy
-// source and Freqtrade config.json, (optionally) fetches the uploaded
-// .joblib FreqAI model, and starts the container. Callers must attach the
-// "live-trading" firewall profile (see createHetznerServer) since this
-// opens the REST API on 0.0.0.0:8080 — that's why real, per-deployment
-// api_server credentials are required params here rather than a constant.
+// source, Freqtrade config.json, and webhook.json (this bot's
+// POST /api/bots/[id]/status URL + token), (optionally) fetches the
+// uploaded .joblib FreqAI model, and starts the container. Callers must
+// attach the "live-trading" firewall profile (see createHetznerServer)
+// since this opens the REST API on 0.0.0.0:8080 — that's why real,
+// per-deployment api_server credentials are required params here rather
+// than a constant.
 export function buildFreqtradeCloudInit(params: CloudInitParams): string {
   const {
     botName,
@@ -193,6 +199,8 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
     apiServerUsername,
     apiServerPassword,
     apiServerJwtSecret,
+    statusWebhookUrl,
+    statusWebhookToken,
   } = params;
 
   assertSafePythonIdentifier(strategy, "strategy");
@@ -235,6 +243,14 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
 
   const configJson = JSON.stringify(freqtradeConfig, null, 2);
 
+  // Not consumed by freqtrade itself — this is the integration point for a
+  // custom FreqAI model class or strategy callback (both fully under the
+  // user's control via strategyCode) to report "retrain_needed" or
+  // "training_complete" back to our backend. Vanilla freqtrade has no
+  // built-in hook for "I just retrained", so wiring this up is on the
+  // strategy/model code; we just guarantee the credentials are there.
+  const webhookJson = JSON.stringify({ url: statusWebhookUrl, token: statusWebhookToken }, null, 2);
+
   // Each runcmd entry is rendered via JSON.stringify — JSON's double-quoted
   // string syntax is valid YAML flow-scalar syntax, which guarantees a `#`,
   // `"`, or `\` in an interpolated URL can never be misread as a YAML
@@ -262,6 +278,7 @@ write_files:
 ${writeFilesBlock([
   { path: "/opt/freqtrade/user_data/config.json", content: configJson },
   { path: `/opt/freqtrade/user_data/strategies/${strategy}.py`, content: strategyCode },
+  { path: "/opt/freqtrade/user_data/webhook.json", content: webhookJson, permissions: "0600" },
 ])}
 
 runcmd:

@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createClient as createServiceRoleClient } from "@supabase/supabase-js";
 import { prisma } from "@/lib/prisma";
 import { extractBearerToken, hashCallbackToken } from "@/lib/training-token";
 import { deleteHetznerServer } from "@/lib/hetzner";
+import { deployBotToVps } from "@/lib/deploy-bot";
 
 const MAX_ERROR_MESSAGE_LENGTH = 2000;
 
@@ -53,10 +55,48 @@ export async function POST(req: NextRequest) {
     data: { status: finalStatus, errorMessage: finalErrorMessage },
   });
 
-  if (finalStatus === "COMPLETED" && job.aiModelPath) {
+  const bot = await prisma.botConfiguration.findUnique({ where: { id: job.botId } });
+
+  if (finalStatus === "COMPLETED" && job.aiModelPath && bot) {
     await prisma.botConfiguration.update({
-      where: { id: job.botId },
+      where: { id: bot.id },
       data: { aiModelPath: job.aiModelPath },
+    });
+
+    if (bot.status === "UPDATING_MODEL") {
+      // This training run was a retrain for an already-live bot (see
+      // lib/train-cloud.ts, which paused it before creating this job) — the
+      // priority cycle only completes once the new model is actually
+      // redeployed and trading resumes. Hetzner doesn't support re-running
+      // cloud-init on an existing server, so "redeploy" here means
+      // delete-and-recreate with the new model — deployBotToVps handles
+      // that and sets status back to TRADING on success.
+      const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      try {
+        if (!serviceRoleKey) throw new Error("SUPABASE_SERVICE_ROLE_KEY is not configured");
+        const supabase = createServiceRoleClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceRoleKey);
+        const freshBot = await prisma.botConfiguration.findUniqueOrThrow({ where: { id: bot.id } });
+        await deployBotToVps({ bot: freshBot, supabase });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to redeploy after retrain";
+        await prisma.botConfiguration.update({
+          where: { id: bot.id },
+          data: { status: "ERROR", lastError: message },
+        });
+      }
+    } else if (bot.status === "TRAINING") {
+      // First-ever training for a bot that was never deployed — nothing to
+      // resume, just clear the way for a manual "Deploy to Cloud" click.
+      await prisma.botConfiguration.update({ where: { id: bot.id }, data: { status: "IDLE" } });
+    }
+  } else if (finalStatus === "FAILED" && bot) {
+    // Deliberately left paused (if it was UPDATING_MODEL) rather than
+    // auto-resumed with the old model — a human should look at why the
+    // retrain failed before this bot trades again. See lib/train-cloud.ts
+    // for the same reasoning on the "couldn't even start" path.
+    await prisma.botConfiguration.update({
+      where: { id: bot.id },
+      data: { status: "ERROR", lastError: finalErrorMessage },
     });
   }
 

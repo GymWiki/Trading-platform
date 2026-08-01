@@ -51,6 +51,24 @@ enum TrainingStatus {
   FAILED
 }
 
+// Operational lifecycle of the bot itself — distinct from TrainingStatus,
+// which tracks a single training run. TRAINING/UPDATING_MODEL are the
+// statuses that must never overlap with live trading: see
+// lib/bot-status.ts (canTrade/assertCanTrade), which every code path that
+// could start or resume trading is required to check.
+//   IDLE           not yet deployed, or deployed but intentionally stopped
+//   TRAINING       first-ever model training in progress, not deployed yet
+//   TRADING        deployed and actively trading (or paper trading)
+//   UPDATING_MODEL was TRADING, now paused while a retrain is in progress
+//   ERROR          a deploy, training, or pause/resume action failed
+enum BotStatus {
+  IDLE
+  TRAINING
+  TRADING
+  UPDATING_MODEL
+  ERROR
+}
+
 model BotConfiguration {
   id     String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId String  @map("user_id") @db.Uuid
@@ -85,6 +103,15 @@ model BotConfiguration {
   apiServerUsername String? @map("api_server_username")
   apiServerPassword String? @map("api_server_password")
   apiServerJwtSecret String? @map("api_server_jwt_secret")
+
+  status    BotStatus @default(IDLE) @map("status")
+  lastError String?   @map("last_error")
+  // sha256 of the one-time bearer token given to the *deployed* freqtrade
+  // instance (via user_data/webhook.json), letting it call back into
+  // POST /api/bots/[id]/status without a user session. Rotated on every
+  // (re)deploy. Distinct from TrainingJob.callbackTokenHash, which
+  // authenticates the ephemeral *training* VM instead.
+  statusWebhookTokenHash String? @unique @map("status_webhook_token_hash")
 
   trainingMode TrainingMode    @default(LOCAL) @map("training_mode")
   trainingJobs TrainingJob[]
