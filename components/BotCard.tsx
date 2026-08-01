@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Download, Rocket, Upload, Loader2, CheckCircle2, Trash2, Cloud, Laptop } from "lucide-react";
+import { Download, Rocket, Upload, Loader2, CheckCircle2, Trash2, Cloud, Laptop, KeyRound, Copy, Check } from "lucide-react";
 import type { BotConfigurationDTO } from "@/lib/types";
 import { StatusBadge, TrainingStatusBadge } from "@/components/ui/StatusBadge";
 import { PaperLiveToggle, TrainingModeToggle } from "@/components/ui/Toggle";
@@ -20,6 +20,9 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   const [isDeploying, setIsDeploying] = useState(false);
   const [isTrainingLocally, setIsTrainingLocally] = useState(false);
   const [isStartingCloudTraining, setIsStartingCloudTraining] = useState(false);
+  const [isRevealingCredentials, setIsRevealingCredentials] = useState(false);
+  const [apiCredentials, setApiCredentials] = useState<{ username: string; password: string } | null>(null);
+  const [copiedField, setCopiedField] = useState<"username" | "password" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const jobActive = bot.latestTrainingJob?.status === "QUEUED" || bot.latestTrainingJob?.status === "TRAINING";
@@ -94,6 +97,7 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
       const modelPath = await invoke<string>("train_local_model", {
         botId: bot.id,
         strategy: bot.strategy,
+        strategyCode: bot.strategyCode,
         exchangeName: bot.exchangeName,
         pairWhitelist: bot.pairWhitelist,
       });
@@ -172,11 +176,33 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
         return;
       }
       onUpdate(data.bot);
+      if (data.apiCredentials) setApiCredentials(data.apiCredentials);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Deploy failed");
     } finally {
       setIsDeploying(false);
     }
+  }
+
+  async function handleRevealCredentials() {
+    setError(null);
+    setIsRevealingCredentials(true);
+    try {
+      const res = await fetch(`/api/bots/${bot.id}/credentials`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Could not load credentials");
+      setApiCredentials(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load credentials");
+    } finally {
+      setIsRevealingCredentials(false);
+    }
+  }
+
+  async function handleCopy(field: "username" | "password", value: string) {
+    await navigator.clipboard.writeText(value);
+    setCopiedField(field);
+    setTimeout(() => setCopiedField((current) => (current === field ? null : current)), 1500);
   }
 
   async function handleDelete() {
@@ -306,6 +332,34 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
         </button>
       </div>
 
+      {bot.deploymentStatus === "VPS_ACTIVE" && !apiCredentials && (
+        <button
+          type="button"
+          onClick={handleRevealCredentials}
+          disabled={isRevealingCredentials}
+          className="flex items-center justify-center gap-1.5 text-[11px] text-slate-500 transition hover:text-primary disabled:opacity-50"
+        >
+          {isRevealingCredentials ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <KeyRound className="h-3 w-3" />
+          )}
+          Show API credentials
+        </button>
+      )}
+
+      {apiCredentials && (
+        <div className="space-y-2 rounded-lg border border-primary/30 bg-primary/5 p-3 text-[11px]">
+          <p className="text-slate-300">
+            Freqtrade REST API on{" "}
+            <span className="font-mono text-primary">{bot.hetznerServerIp ?? "?"}:8080</span> — save these now,
+            they won&apos;t be shown in full again after you navigate away.
+          </p>
+          <CredentialRow label="Username" value={apiCredentials.username} field="username" onCopy={handleCopy} copied={copiedField === "username"} />
+          <CredentialRow label="Password" value={apiCredentials.password} field="password" onCopy={handleCopy} copied={copiedField === "password"} />
+        </div>
+      )}
+
       <button
         type="button"
         onClick={handleDelete}
@@ -313,6 +367,33 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
       >
         <Trash2 className="h-3 w-3" />
         Remove bot
+      </button>
+    </div>
+  );
+}
+
+interface CredentialRowProps {
+  label: string;
+  value: string;
+  field: "username" | "password";
+  copied: boolean;
+  onCopy: (field: "username" | "password", value: string) => void;
+}
+
+function CredentialRow({ label, value, field, copied, onCopy }: CredentialRowProps) {
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-md bg-background px-2 py-1.5">
+      <div className="min-w-0">
+        <div className="text-slate-500">{label}</div>
+        <div className="truncate font-mono text-slate-200">{value}</div>
+      </div>
+      <button
+        type="button"
+        onClick={() => onCopy(field, value)}
+        className="shrink-0 rounded-md border border-border p-1.5 text-slate-400 transition hover:border-primary hover:text-primary"
+        title={`Copy ${label.toLowerCase()}`}
+      >
+        {copied ? <Check className="h-3 w-3 text-primary" /> : <Copy className="h-3 w-3" />}
       </button>
     </div>
   );

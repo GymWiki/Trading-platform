@@ -63,9 +63,14 @@ model BotConfiguration {
   exchangeApiKey    String @map("exchange_api_key")
   exchangeApiSecret String @map("exchange_api_secret")
 
-  strategy       String
-  pairWhitelist  String  @map("pair_whitelist") // comma-separated pairs, e.g. "BTC/USDT,ETH/USDT"
-  stakeAmount    Float   @map("stake_amount")
+  strategy String
+  // The actual Freqtrade strategy source (must define `class <strategy>`),
+  // written into user_data/strategies/<strategy>.py on every VPS this bot
+  // is deployed or trained on — without it, the container has nothing to
+  // load and fails at startup.
+  strategyCode  String  @map("strategy_code")
+  pairWhitelist String  @map("pair_whitelist") // comma-separated pairs, e.g. "BTC/USDT,ETH/USDT"
+  stakeAmount   Float   @map("stake_amount")
   isPaperTrading Boolean @default(true) @map("is_paper_trading")
 
   deploymentStatus DeploymentStatus @default(LOCAL) @map("deployment_status")
@@ -73,6 +78,13 @@ model BotConfiguration {
 
   hetznerServerId String? @map("hetzner_server_id")
   hetznerServerIp String? @map("hetzner_server_ip")
+
+  // Randomized per deployment (see /api/deploy) so the freqtrade REST API
+  // exposed on the VPS never ships with the same guessable default
+  // credentials on every bot. Encrypted at rest like the exchange keys.
+  apiServerUsername String? @map("api_server_username")
+  apiServerPassword String? @map("api_server_password")
+  apiServerJwtSecret String? @map("api_server_jwt_secret")
 
   trainingMode TrainingMode    @default(LOCAL) @map("training_mode")
   trainingJobs TrainingJob[]

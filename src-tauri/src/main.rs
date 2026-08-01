@@ -30,9 +30,18 @@ async fn train_local_model(
     app: AppHandle,
     bot_id: String,
     strategy: String,
+    strategy_code: String,
     exchange_name: String,
     pair_whitelist: String,
 ) -> Result<String, String> {
+    // `strategy` becomes a filename (user_data/strategies/<strategy>.py) —
+    // reject anything that isn't a plain identifier before it's ever used
+    // as a path, mirroring the same check the web API applies at creation
+    // time (see lib/strategy-validation.ts).
+    if !is_safe_python_identifier(&strategy) {
+        return Err(format!("strategy must be a valid Python identifier (got: {strategy:?})"));
+    }
+
     let work_dir = app
         .path()
         .app_local_data_dir()
@@ -41,7 +50,10 @@ async fn train_local_model(
         .join(&bot_id);
 
     let user_data_dir = work_dir.join("user_data");
-    std::fs::create_dir_all(&user_data_dir).map_err(|e| format!("could not create user_data dir: {e}"))?;
+    let strategies_dir = user_data_dir.join("strategies");
+    std::fs::create_dir_all(&strategies_dir).map_err(|e| format!("could not create strategies dir: {e}"))?;
+    std::fs::write(strategies_dir.join(format!("{strategy}.py")), &strategy_code)
+        .map_err(|e| format!("could not write strategy file: {e}"))?;
 
     let pairs: Vec<String> = pair_whitelist
         .split(',')
@@ -114,6 +126,15 @@ async fn train_local_model(
             multiple.len()
         )),
     }
+}
+
+fn is_safe_python_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else { return false };
+    if value.len() > 64 || !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 async fn run_freqtrade_step(app: &AppHandle, bot_id: &str, work_dir: &Path, args: &[&str]) -> Result<(), String> {

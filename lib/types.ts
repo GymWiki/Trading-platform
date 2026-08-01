@@ -15,12 +15,14 @@ export interface BotConfigurationDTO {
   botName: string;
   exchangeName: string;
   strategy: string;
+  strategyCode: string;
   pairWhitelist: string;
   stakeAmount: number;
   isPaperTrading: boolean;
   deploymentStatus: DeploymentStatus;
   aiModelPath: string | null;
   hetznerServerIp: string | null;
+  apiServerUsername: string | null;
   trainingMode: TrainingMode;
   latestTrainingJob: TrainingJobDTO | null;
   createdAt: string | Date;

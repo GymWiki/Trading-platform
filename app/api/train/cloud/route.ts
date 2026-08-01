@@ -63,6 +63,7 @@ export async function POST(req: NextRequest) {
       botName: bot.botName,
       exchangeName: bot.exchangeName,
       strategy: bot.strategy,
+      strategyCode: bot.strategyCode,
       pairWhitelist: bot.pairWhitelist.split(",").map((p) => p.trim()).filter(Boolean),
       uploadUrlEndpoint: `${appUrl}/api/train/cloud/upload-url`,
       callbackUrl: `${appUrl}/api/train/cloud/callback`,
@@ -74,6 +75,7 @@ export async function POST(req: NextRequest) {
       name: `train-${job.id}`,
       cloudInit,
       serverType: TRAINING_SERVER_TYPE,
+      firewallProfile: "training",
     });
 
     const updatedJob = await prisma.trainingJob.update({

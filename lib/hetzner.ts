@@ -1,9 +1,75 @@
+import { isSafePythonIdentifier } from "@/lib/strategy-validation";
+
 const HETZNER_API_BASE = "https://api.hetzner.cloud/v1";
+
+function requireHetznerToken(): string {
+  const token = process.env.HETZNER_API_TOKEN;
+  if (!token) throw new Error("HETZNER_API_TOKEN is not set");
+  return token;
+}
+
+type FirewallProfile = "live-trading" | "training";
+
+// Creates (or reuses) a Hetzner Cloud Firewall for the given profile and
+// returns its id. "live-trading" opens only what a deployed bot actually
+// needs (the freqtrade REST API, plus SSH only if a key is configured);
+// "training" opens nothing at all — the ephemeral training VM never
+// listens on any port, it only makes outbound calls.
+async function ensureFirewall(profile: FirewallProfile): Promise<number> {
+  const token = requireHetznerToken();
+  const name = `freqtrade-command-center-${profile}`;
+
+  const listRes = await fetch(`${HETZNER_API_BASE}/firewalls?name=${encodeURIComponent(name)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!listRes.ok) {
+    throw new Error(`Hetzner API error (${listRes.status}): ${await listRes.text()}`);
+  }
+  const { firewalls } = (await listRes.json()) as { firewalls: Array<{ id: number }> };
+  if (firewalls?.[0]?.id) return firewalls[0].id;
+
+  const rules =
+    profile === "live-trading"
+      ? [
+          {
+            direction: "in",
+            protocol: "tcp",
+            port: "8080",
+            source_ips: ["0.0.0.0/0", "::/0"],
+            description: "Freqtrade REST API / FreqUI",
+          },
+          ...(process.env.HETZNER_SSH_KEY_ID
+            ? [
+                {
+                  direction: "in",
+                  protocol: "tcp",
+                  port: "22",
+                  source_ips: ["0.0.0.0/0", "::/0"],
+                  description: "SSH (key-only auth)",
+                },
+              ]
+            : []),
+        ]
+      : [];
+
+  const createRes = await fetch(`${HETZNER_API_BASE}/firewalls`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name, rules, labels: { app: "freqtrade-command-center" } }),
+  });
+  if (!createRes.ok) {
+    throw new Error(`Hetzner API error (${createRes.status}): ${await createRes.text()}`);
+  }
+  const { firewall } = (await createRes.json()) as { firewall: { id: number } };
+  return firewall.id;
+}
 
 interface CreateServerParams {
   name: string;
   cloudInit: string;
   serverType?: string;
+  /** Attaches the matching Hetzner Cloud Firewall. Omit only for servers that should have no inbound rules managed at all. */
+  firewallProfile?: FirewallProfile;
 }
 
 interface HetznerServerResponse {
@@ -20,9 +86,10 @@ export async function createHetznerServer({
   name,
   cloudInit,
   serverType,
+  firewallProfile,
 }: CreateServerParams): Promise<HetznerServerResponse> {
-  const token = process.env.HETZNER_API_TOKEN;
-  if (!token) throw new Error("HETZNER_API_TOKEN is not set");
+  const token = requireHetznerToken();
+  const firewallId = firewallProfile ? await ensureFirewall(firewallProfile) : undefined;
 
   const res = await fetch(`${HETZNER_API_BASE}/servers`, {
     method: "POST",
@@ -37,6 +104,7 @@ export async function createHetznerServer({
       location: process.env.HETZNER_LOCATION || "nbg1",
       user_data: cloudInit,
       ssh_keys: process.env.HETZNER_SSH_KEY_ID ? [process.env.HETZNER_SSH_KEY_ID] : undefined,
+      firewalls: firewallId ? [{ firewall: firewallId }] : undefined,
       labels: { app: "freqtrade-command-center" },
     }),
   });
@@ -50,8 +118,7 @@ export async function createHetznerServer({
 }
 
 export async function deleteHetznerServer(serverId: string): Promise<void> {
-  const token = process.env.HETZNER_API_TOKEN;
-  if (!token) throw new Error("HETZNER_API_TOKEN is not set");
+  const token = requireHetznerToken();
 
   const res = await fetch(`${HETZNER_API_BASE}/servers/${serverId}`, {
     method: "DELETE",
@@ -64,20 +131,53 @@ export async function deleteHetznerServer(serverId: string): Promise<void> {
   }
 }
 
+// Defense in depth: app/api/bots/route.ts already rejects an unsafe
+// `strategy` value at creation time, but this function shouldn't blindly
+// trust callers for something used as a filesystem path.
+function assertSafePythonIdentifier(value: string, label: string): void {
+  if (!isSafePythonIdentifier(value)) {
+    throw new Error(`${label} must be a valid Python identifier (got: ${JSON.stringify(value)})`);
+  }
+}
+
+// Renders a cloud-init `write_files` entry. Content lands in the target
+// file completely verbatim — no shell involved, so arbitrary strategy
+// source (quotes, `$`, backticks, anything) is always safe here, unlike
+// content destined for a shell script (see shellEscapeDouble below).
+function writeFilesBlock(entries: Array<{ path: string; content: string; permissions?: string }>): string {
+  return entries
+    .map(({ path, content, permissions = "0644" }) => {
+      const indented = content
+        .split("\n")
+        .map((line) => `      ${line}`)
+        .join("\n");
+      return `  - path: ${path}\n    permissions: '${permissions}'\n    content: |\n${indented}`;
+    })
+    .join("\n");
+}
+
 interface CloudInitParams {
   botName: string;
   exchangeName: string;
   exchangeApiKey: string;
   exchangeApiSecret: string;
   strategy: string;
+  strategyCode: string;
   pairWhitelist: string[];
   stakeAmount: number;
   isPaperTrading: boolean;
   aiModelDownloadUrl?: string;
+  apiServerUsername: string;
+  apiServerPassword: string;
+  apiServerJwtSecret: string;
 }
 
-// Builds a cloud-init script that installs Docker, writes a Freqtrade config.json,
-// (optionally) fetches the uploaded .joblib FreqAI model, and starts the container.
+// Builds a cloud-init script that installs Docker, writes the strategy
+// source and Freqtrade config.json, (optionally) fetches the uploaded
+// .joblib FreqAI model, and starts the container. Callers must attach the
+// "live-trading" firewall profile (see createHetznerServer) since this
+// opens the REST API on 0.0.0.0:8080 — that's why real, per-deployment
+// api_server credentials are required params here rather than a constant.
 export function buildFreqtradeCloudInit(params: CloudInitParams): string {
   const {
     botName,
@@ -85,11 +185,18 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
     exchangeApiKey,
     exchangeApiSecret,
     strategy,
+    strategyCode,
     pairWhitelist,
     stakeAmount,
     isPaperTrading,
     aiModelDownloadUrl,
+    apiServerUsername,
+    apiServerPassword,
+    apiServerJwtSecret,
   } = params;
+
+  assertSafePythonIdentifier(strategy, "strategy");
+  const safeBotName = botName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
 
   const freqtradeConfig = {
     max_open_trades: 5,
@@ -113,27 +220,37 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
     freqai: aiModelDownloadUrl
       ? {
           enabled: true,
-          identifier: `${botName}-model`,
+          identifier: `${safeBotName}-model`,
         }
       : undefined,
     api_server: {
       enabled: true,
       listen_ip_address: "0.0.0.0",
       listen_port: 8080,
-      jwt_secret_key: "CHANGE_ME_ON_DEPLOY",
-      username: "freqtrader",
-      password: "CHANGE_ME_ON_DEPLOY",
+      jwt_secret_key: apiServerJwtSecret,
+      username: apiServerUsername,
+      password: apiServerPassword,
     },
   };
 
   const configJson = JSON.stringify(freqtradeConfig, null, 2);
 
-  const fetchModelStep = aiModelDownloadUrl
-    ? `
-mkdir -p /opt/freqtrade/user_data/models
-curl -fsSL "${aiModelDownloadUrl}" -o /opt/freqtrade/user_data/models/${botName}-model.joblib
-`
-    : "";
+  // Each runcmd entry is rendered via JSON.stringify — JSON's double-quoted
+  // string syntax is valid YAML flow-scalar syntax, which guarantees a `#`,
+  // `"`, or `\` in an interpolated URL can never be misread as a YAML
+  // comment or break the surrounding quoting.
+  const runcmdSteps = [
+    "systemctl enable docker",
+    "systemctl start docker",
+    ...(aiModelDownloadUrl
+      ? [
+          "mkdir -p /opt/freqtrade/user_data/models",
+          `curl -fsSL "${aiModelDownloadUrl}" -o /opt/freqtrade/user_data/models/${safeBotName}-model.joblib`,
+        ]
+      : []),
+    `docker run -d --name ${safeBotName} --restart unless-stopped -v /opt/freqtrade/user_data:/freqtrade/user_data -p 8080:8080 freqtradeorg/freqtrade:stable trade --config /freqtrade/user_data/config.json --strategy ${strategy}`,
+  ];
+  const runcmdYaml = runcmdSteps.map((step) => `  - ${JSON.stringify(step)}`).join("\n");
 
   return `#cloud-config
 package_update: true
@@ -141,23 +258,14 @@ packages:
   - docker.io
   - docker-compose-plugin
 
+write_files:
+${writeFilesBlock([
+  { path: "/opt/freqtrade/user_data/config.json", content: configJson },
+  { path: `/opt/freqtrade/user_data/strategies/${strategy}.py`, content: strategyCode },
+])}
+
 runcmd:
-  - systemctl enable docker
-  - systemctl start docker
-  - mkdir -p /opt/freqtrade/user_data
-  - |
-    cat > /opt/freqtrade/user_data/config.json << 'EOF'
-    ${configJson}
-    EOF
-  - |
-    bash -c '${fetchModelStep.trim().replace(/\n/g, "; ")}'
-  - >
-    docker run -d --name ${botName}
-    --restart unless-stopped
-    -v /opt/freqtrade/user_data:/freqtrade/user_data
-    -p 8080:8080
-    freqtradeorg/freqtrade:stable
-    trade --config /freqtrade/user_data/config.json --strategy ${strategy}
+${runcmdYaml}
 `;
 }
 
@@ -174,6 +282,7 @@ interface TrainingCloudInitParams {
   botName: string;
   exchangeName: string;
   strategy: string;
+  strategyCode: string;
   pairWhitelist: string[];
   /**
    * GET endpoint (/api/train/cloud/upload-url) the VM calls right before
@@ -196,11 +305,13 @@ interface TrainingCloudInitParams {
 }
 
 // Builds a cloud-init script for an ephemeral training VM: installs Docker,
-// downloads historical data, trains a FreqAI model via `backtesting`
-// (freqtrade has no standalone "train" command — training happens as a side
-// effect of backtesting with FreqAI enabled), uploads the single resulting
-// .joblib to a pre-signed Supabase Storage URL, reports status back to our
-// API, and unconditionally deletes itself.
+// writes the strategy source, downloads historical data, trains a FreqAI
+// model via `backtesting` (freqtrade has no standalone "train" command —
+// training happens as a side effect of backtesting with FreqAI enabled),
+// uploads the single resulting .joblib to a pre-signed Supabase Storage
+// URL, reports status back to our API, and unconditionally deletes itself.
+// Callers should attach the "training" firewall profile (no inbound rules
+// at all — this VM never needs to accept a connection).
 //
 // Deliberately does NOT take exchange API credentials: downloading history
 // and backtesting only need public market data, so the user's real trading
@@ -210,6 +321,7 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     botName,
     exchangeName,
     strategy,
+    strategyCode,
     pairWhitelist,
     uploadUrlEndpoint,
     callbackUrl,
@@ -220,6 +332,8 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     timerangeDays = 180,
     maxRuntimeHours = 4,
   } = params;
+
+  assertSafePythonIdentifier(strategy, "strategy");
 
   const safeBotName = botName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
 
@@ -257,7 +371,9 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
   // Every value that came from user-editable bot fields is escaped before
   // being embedded in a bash double-quoted assignment (see shellEscapeDouble
   // doc comment above); everything downstream references these as "$VAR",
-  // never interpolated inline into a command.
+  // never interpolated inline into a command. strategyCode itself is NOT
+  // embedded in this shell script at all — it goes through write_files
+  // below, which is inert plain-text, so it needs no shell escaping.
   const trainScript = `#!/bin/bash
 set -uo pipefail
 
@@ -311,10 +427,6 @@ fail() {
 mkdir -p /opt/freqtrade/user_data/models
 cd /opt/freqtrade || fail "could not cd into /opt/freqtrade"
 
-cat > user_data/config.json << 'CONFIGEOF'
-${configJson}
-CONFIGEOF
-
 docker pull freqtradeorg/freqtrade:stable || fail "could not pull freqtrade image"
 
 docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data freqtradeorg/freqtrade:stable \\
@@ -355,13 +467,11 @@ packages:
   - jq
 
 write_files:
-  - path: /opt/train.sh
-    permissions: '0700'
-    content: |
-${trainScript
-  .split("\n")
-  .map((line) => `      ${line}`)
-  .join("\n")}
+${writeFilesBlock([
+  { path: "/opt/freqtrade/user_data/config.json", content: configJson },
+  { path: `/opt/freqtrade/user_data/strategies/${strategy}.py`, content: strategyCode },
+  { path: "/opt/train.sh", content: trainScript, permissions: "0700" },
+])}
 
 runcmd:
   - systemctl enable docker

@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
 import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
-import { decrypt } from "@/lib/encryption";
+import { decrypt, encrypt } from "@/lib/encryption";
 import { buildFreqtradeCloudInit, createHetznerServer } from "@/lib/hetzner";
+import { botSelect, toBotDTO } from "@/lib/bot-select";
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
@@ -74,22 +76,34 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Randomized per deployment — every previous version of this route baked
+  // in a literal "CHANGE_ME_ON_DEPLOY" password, meaning every deployed bot
+  // exposed the same known credentials on its public REST API.
+  const apiServerUsername = `freqtrader-${crypto.randomBytes(4).toString("hex")}`;
+  const apiServerPassword = crypto.randomBytes(24).toString("base64url");
+  const apiServerJwtSecret = crypto.randomBytes(32).toString("hex");
+
   const cloudInit = buildFreqtradeCloudInit({
     botName: bot.botName.toLowerCase().replace(/[^a-z0-9-]/g, "-"),
     exchangeName: bot.exchangeName,
     exchangeApiKey: decrypt(bot.exchangeApiKey),
     exchangeApiSecret: decrypt(bot.exchangeApiSecret),
     strategy: bot.strategy,
+    strategyCode: bot.strategyCode,
     pairWhitelist: bot.pairWhitelist.split(",").map((p) => p.trim()).filter(Boolean),
     stakeAmount: bot.stakeAmount,
     isPaperTrading: bot.isPaperTrading,
     aiModelDownloadUrl: signedUrlData.signedUrl,
+    apiServerUsername,
+    apiServerPassword,
+    apiServerJwtSecret,
   });
 
   try {
     const { server } = await createHetznerServer({
       name: `bot-${bot.id}`,
       cloudInit,
+      firewallProfile: "live-trading",
     });
 
     const updated = await prisma.botConfiguration.update({
@@ -98,10 +112,19 @@ export async function POST(req: NextRequest) {
         deploymentStatus: "VPS_ACTIVE",
         hetznerServerId: String(server.id),
         hetznerServerIp: server.public_net?.ipv4?.ip ?? null,
+        apiServerUsername,
+        apiServerPassword: encrypt(apiServerPassword),
+        apiServerJwtSecret: encrypt(apiServerJwtSecret),
       },
+      select: botSelect,
     });
 
-    return NextResponse.json({ requiresCheckout: false, bot: updated });
+    return NextResponse.json({
+      requiresCheckout: false,
+      bot: toBotDTO(updated),
+      // Only ever sent in this one response — see GET /api/bots/[id]/credentials to view again later.
+      apiCredentials: { username: apiServerUsername, password: apiServerPassword },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to provision VPS";
     return NextResponse.json({ error: message }, { status: 502 });
