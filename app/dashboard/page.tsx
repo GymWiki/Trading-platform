@@ -8,7 +8,7 @@ import { BotFleetGrid } from "@/components/BotFleetGrid";
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions);
   if (!session) {
-    redirect("/");
+    redirect("/login");
   }
 
   const bots = await prisma.botConfiguration.findMany({

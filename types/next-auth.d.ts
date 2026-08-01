@@ -1,7 +1,13 @@
 import "next-auth";
-import "next-auth/adapters";
+import "next-auth/jwt";
 
 declare module "next-auth" {
+  interface User {
+    id: string;
+    vpsBotQuota: number;
+    stripeCustomerId: string | null;
+  }
+
   interface Session {
     user: {
       id: string;
@@ -9,13 +15,13 @@ declare module "next-auth" {
       stripeCustomerId: string | null;
       name?: string | null;
       email?: string | null;
-      image?: string | null;
     };
   }
 }
 
-declare module "next-auth/adapters" {
-  interface AdapterUser {
+declare module "next-auth/jwt" {
+  interface JWT {
+    id: string;
     vpsBotQuota: number;
     stripeCustomerId: string | null;
   }
