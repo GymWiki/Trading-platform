@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
 import { deleteHetznerServer } from "@/lib/hetzner";
 
@@ -8,15 +9,35 @@ import { deleteHetznerServer } from "@/lib/hetzner";
 // already have fired, so something has gone wrong and we force cleanup.
 const STALE_TRAINING_HOURS = 5;
 
+// Plain string comparison would leak timing information about how many
+// leading characters of the presented token matched CRON_SECRET. This is
+// hit over plain HTTP by an external scheduler (not Vercel's own signed
+// cron mechanism), so treat the Authorization header like any other
+// untrusted bearer token.
+function isAuthorized(req: NextRequest): boolean {
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) return false;
+
+  const authHeader = req.headers.get("authorization");
+  if (!authHeader) return false;
+
+  const expected = Buffer.from(`Bearer ${cronSecret}`);
+  const actual = Buffer.from(authHeader);
+  if (actual.length !== expected.length) return false;
+  return crypto.timingSafeEqual(actual, expected);
+}
+
 // Failsafe layer 3 of 3: catches whatever layers 1 (the VM's own trap) and 2
 // (the callback route's redundant delete) missed — e.g. a hard VM crash
-// that never ran any shutdown code at all. Wire this up with Vercel Cron
-// (see vercel.json) hitting it every 15 minutes, authenticated via
-// CRON_SECRET (Vercel sends `Authorization: Bearer $CRON_SECRET`
-// automatically once that env var is set).
+// that never ran any shutdown code at all.
+//
+// Triggered by an external scheduler (e.g. cron-job.org) hitting this URL
+// every ~15 minutes with an `Authorization: Bearer <CRON_SECRET>` header
+// configured on the scheduler's side — deliberately not Vercel Cron, so
+// this route makes no assumption about how the request was scheduled and
+// only ever trusts a literal, exact bearer-token match.
 export async function GET(req: NextRequest) {
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret || req.headers.get("authorization") !== `Bearer ${cronSecret}`) {
+  if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
