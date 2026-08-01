@@ -15,10 +15,16 @@ body {
   @apply bg-primary/30 text-white;
 }
 
-.card-surface {
-  @apply bg-surface border border-border rounded-xl;
-}
+/* Components go in Tailwind's "components" layer so utility classes used
+   alongside them (e.g. `pl-9` on top of `.input`'s own `px-3`) always win
+   the cascade, regardless of where this file places them relative to the
+   `@tailwind utilities` import. */
+@layer components {
+  .card-surface {
+    @apply bg-surface border border-border rounded-xl;
+  }
 
-.input {
-  @apply w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-primary;
+  .input {
+    @apply w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-primary;
+  }
 }

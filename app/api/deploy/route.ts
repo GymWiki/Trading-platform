@@ -61,6 +61,19 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // The "models" bucket is private, so the Hetzner VPS (which has no
+  // Supabase session) needs a short-lived signed URL to fetch the file
+  // during cloud-init — long enough for boot + Docker pull + download.
+  const { data: signedUrlData, error: signedUrlError } = await supabase.storage
+    .from("models")
+    .createSignedUrl(bot.aiModelPath, 3600);
+  if (signedUrlError || !signedUrlData) {
+    return NextResponse.json(
+      { error: `Failed to create a download URL for the model: ${signedUrlError?.message}` },
+      { status: 502 },
+    );
+  }
+
   const cloudInit = buildFreqtradeCloudInit({
     botName: bot.botName.toLowerCase().replace(/[^a-z0-9-]/g, "-"),
     exchangeName: bot.exchangeName,
@@ -70,7 +83,7 @@ export async function POST(req: NextRequest) {
     pairWhitelist: bot.pairWhitelist.split(",").map((p) => p.trim()).filter(Boolean),
     stakeAmount: bot.stakeAmount,
     isPaperTrading: bot.isPaperTrading,
-    aiModelDownloadUrl: `${process.env.NEXT_PUBLIC_APP_URL}${bot.aiModelPath}`,
+    aiModelDownloadUrl: signedUrlData.signedUrl,
   });
 
   try {

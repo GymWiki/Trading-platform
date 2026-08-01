@@ -28,9 +28,5 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# uploads (local dev model files)
-/public/uploads/*
-!/public/uploads/.gitkeep
-
 # prisma
 /prisma/dev.db

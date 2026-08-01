@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { mkdir, writeFile } from "fs/promises";
-import path from "path";
 import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 
-const MAX_FILE_SIZE_BYTES = 200 * 1024 * 1024; // 200MB
+const MAX_FILE_SIZE_BYTES = 200 * 1024 * 1024; // 200MB, matches the "models" bucket's file_size_limit
+const MODELS_BUCKET = "models";
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
@@ -37,19 +36,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Bot not found" }, { status: 404 });
   }
 
-  const uploadDir = path.join(process.cwd(), "public", "uploads", user.id, botId);
-  await mkdir(uploadDir, { recursive: true });
+  // Path is scoped to the user's own folder so the storage.objects RLS
+  // policies (see supabase/migrations) can enforce ownership.
+  const objectPath = `${user.id}/${botId}/model-${Date.now()}.joblib`;
 
-  const safeFileName = `model-${Date.now()}.joblib`;
-  const destination = path.join(uploadDir, safeFileName);
-  const buffer = Buffer.from(await file.arrayBuffer());
-  await writeFile(destination, buffer);
+  const { error: uploadError } = await supabase.storage.from(MODELS_BUCKET).upload(objectPath, file, {
+    contentType: "application/octet-stream",
+    upsert: false,
+  });
+  if (uploadError) {
+    return NextResponse.json({ error: `Upload failed: ${uploadError.message}` }, { status: 502 });
+  }
 
-  const publicPath = `/uploads/${user.id}/${botId}/${safeFileName}`;
+  // Best-effort cleanup of the previous model file, if any.
+  if (bot.aiModelPath) {
+    await supabase.storage.from(MODELS_BUCKET).remove([bot.aiModelPath]);
+  }
 
   const updated = await prisma.botConfiguration.update({
     where: { id: botId },
-    data: { aiModelPath: publicPath },
+    data: { aiModelPath: objectPath },
   });
 
   return NextResponse.json({ aiModelPath: updated.aiModelPath });
