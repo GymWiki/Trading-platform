@@ -1,4 +1,14 @@
 export type DeploymentStatus = "LOCAL" | "VPS_ACTIVE" | "INACTIVE";
+export type TrainingMode = "LOCAL" | "CLOUD";
+export type TrainingStatus = "QUEUED" | "TRAINING" | "COMPLETED" | "FAILED";
+
+export interface TrainingJobDTO {
+  id: string;
+  status: TrainingStatus;
+  mode: TrainingMode;
+  errorMessage: string | null;
+  createdAt: string | Date;
+}
 
 export interface BotConfigurationDTO {
   id: string;
@@ -11,5 +21,7 @@ export interface BotConfigurationDTO {
   deploymentStatus: DeploymentStatus;
   aiModelPath: string | null;
   hetznerServerIp: string | null;
+  trainingMode: TrainingMode;
+  latestTrainingJob: TrainingJobDTO | null;
   createdAt: string | Date;
 }

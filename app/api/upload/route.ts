@@ -16,11 +16,22 @@ export async function POST(req: NextRequest) {
 
   const formData = await req.formData();
   const botId = formData.get("botId");
-  const file = formData.get("file");
 
   if (typeof botId !== "string" || !botId) {
     return NextResponse.json({ error: "botId is required" }, { status: 400 });
   }
+
+  // Strictly a single file, never a list: reject outright if the client
+  // sent zero or more than one "file" part rather than silently taking the
+  // first one, since formData.get() would otherwise hide that ambiguity.
+  const files = formData.getAll("file");
+  if (files.length !== 1) {
+    return NextResponse.json(
+      { error: `Expected exactly 1 file, received ${files.length}` },
+      { status: 400 },
+    );
+  }
+  const [file] = files;
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "file is required" }, { status: 400 });
   }

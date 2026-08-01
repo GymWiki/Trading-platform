@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { deleteHetznerServer } from "@/lib/hetzner";
+import { botSelect, toBotDTO } from "@/lib/bot-select";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const supabase = await createClient();
@@ -17,30 +18,29 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: "Bot not found" }, { status: 404 });
   }
 
-  const { isPaperTrading } = await req.json();
-  if (typeof isPaperTrading !== "boolean") {
+  const body = await req.json();
+  const { isPaperTrading, trainingMode } = body ?? {};
+
+  if (isPaperTrading === undefined && trainingMode === undefined) {
+    return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
+  }
+  if (isPaperTrading !== undefined && typeof isPaperTrading !== "boolean") {
     return NextResponse.json({ error: "isPaperTrading must be a boolean" }, { status: 400 });
+  }
+  if (trainingMode !== undefined && trainingMode !== "LOCAL" && trainingMode !== "CLOUD") {
+    return NextResponse.json({ error: "trainingMode must be LOCAL or CLOUD" }, { status: 400 });
   }
 
   const updated = await prisma.botConfiguration.update({
     where: { id: bot.id },
-    data: { isPaperTrading },
-    select: {
-      id: true,
-      botName: true,
-      exchangeName: true,
-      strategy: true,
-      pairWhitelist: true,
-      stakeAmount: true,
-      isPaperTrading: true,
-      deploymentStatus: true,
-      aiModelPath: true,
-      hetznerServerIp: true,
-      createdAt: true,
+    data: {
+      ...(isPaperTrading !== undefined && { isPaperTrading }),
+      ...(trainingMode !== undefined && { trainingMode }),
     },
+    select: botSelect,
   });
 
-  return NextResponse.json({ bot: updated });
+  return NextResponse.json({ bot: toBotDTO(updated) });
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {

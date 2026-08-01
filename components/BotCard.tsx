@@ -1,10 +1,11 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Download, Rocket, Upload, Loader2, CheckCircle2, Trash2 } from "lucide-react";
+import { Download, Rocket, Upload, Loader2, CheckCircle2, Trash2, Cloud, Laptop } from "lucide-react";
 import type { BotConfigurationDTO } from "@/lib/types";
-import { StatusBadge } from "@/components/ui/StatusBadge";
-import { PaperLiveToggle } from "@/components/ui/Toggle";
+import { StatusBadge, TrainingStatusBadge } from "@/components/ui/StatusBadge";
+import { PaperLiveToggle, TrainingModeToggle } from "@/components/ui/Toggle";
+import { isTauri } from "@/lib/tauri";
 
 interface BotCardProps {
   bot: BotConfigurationDTO;
@@ -17,7 +18,11 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   const [isTogglingMode, setIsTogglingMode] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
+  const [isTrainingLocally, setIsTrainingLocally] = useState(false);
+  const [isStartingCloudTraining, setIsStartingCloudTraining] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const jobActive = bot.latestTrainingJob?.status === "QUEUED" || bot.latestTrainingJob?.status === "TRAINING";
 
   async function handleToggle(isPaperTrading: boolean) {
     setError(null);
@@ -38,6 +43,22 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
     }
   }
 
+  async function handleTrainingModeChange(trainingMode: "LOCAL" | "CLOUD") {
+    setError(null);
+    try {
+      const res = await fetch(`/api/bots/${bot.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trainingMode }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to update training mode");
+      onUpdate(data.bot);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update training mode");
+    }
+  }
+
   async function handleFileSelected(file: File) {
     setError(null);
     setIsUploading(true);
@@ -54,6 +75,63 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  // Mode A (local): Rust spawns the FreqAI child process and hands back the
+  // path of the one resulting .joblib file. Everything after that reuses
+  // the exact same upload flow as a manual file pick — no separate
+  // auth/upload path in Rust, since this JS runs inside the same
+  // authenticated dashboard session whether it's a browser tab or the
+  // Tauri webview.
+  async function handleStartLocalTraining() {
+    setError(null);
+    setIsTrainingLocally(true);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const { readFile } = await import("@tauri-apps/plugin-fs");
+
+      const modelPath = await invoke<string>("train_local_model", {
+        botId: bot.id,
+        strategy: bot.strategy,
+        exchangeName: bot.exchangeName,
+        pairWhitelist: bot.pairWhitelist,
+      });
+
+      const bytes = await readFile(modelPath);
+      const filename = modelPath.split(/[\\/]/).pop() ?? `${bot.botName}-model.joblib`;
+      const file = new File([new Uint8Array(bytes)], filename, { type: "application/octet-stream" });
+      await handleFileSelected(file);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Local training failed");
+    } finally {
+      setIsTrainingLocally(false);
+    }
+  }
+
+  // Mode B (cloud): fire-and-forget — the VM reports back on its own via
+  // /api/train/cloud/callback. BotFleetGrid polls while a job is active and
+  // will push the updated status into this card's props.
+  async function handleStartCloudTraining() {
+    setError(null);
+    setIsStartingCloudTraining(true);
+    try {
+      const res = await fetch("/api/train/cloud", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ botId: bot.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to start cloud training");
+      onUpdate({
+        ...bot,
+        trainingMode: "CLOUD",
+        latestTrainingJob: { id: data.job.id, status: data.job.status, mode: "CLOUD", errorMessage: null, createdAt: data.job.createdAt },
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start cloud training");
+    } finally {
+      setIsStartingCloudTraining(false);
     }
   }
 
@@ -125,6 +203,55 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
         disabled={isTogglingMode}
       />
 
+      <div className="space-y-2 rounded-lg border border-border p-3">
+        <TrainingModeToggle
+          mode={bot.trainingMode}
+          onChange={handleTrainingModeChange}
+          disabled={jobActive}
+        />
+
+        {bot.latestTrainingJob && (
+          <div className="flex items-center justify-between gap-2">
+            <TrainingStatusBadge status={bot.latestTrainingJob.status} />
+            {bot.latestTrainingJob.status === "FAILED" && bot.latestTrainingJob.errorMessage && (
+              <span className="truncate text-[11px] text-red-400" title={bot.latestTrainingJob.errorMessage}>
+                {bot.latestTrainingJob.errorMessage}
+              </span>
+            )}
+          </div>
+        )}
+
+        {bot.trainingMode === "CLOUD" ? (
+          <button
+            type="button"
+            onClick={handleStartCloudTraining}
+            disabled={isStartingCloudTraining || jobActive}
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-accent/40 px-3 py-2 text-xs font-medium text-accent transition hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isStartingCloudTraining || jobActive ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Cloud className="h-3.5 w-3.5" />
+            )}
+            {jobActive ? "Training in the cloud…" : "Start Cloud Training"}
+          </button>
+        ) : isTauri() ? (
+          <button
+            type="button"
+            onClick={handleStartLocalTraining}
+            disabled={isTrainingLocally}
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-primary/40 px-3 py-2 text-xs font-medium text-primary transition hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isTrainingLocally ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Laptop className="h-3.5 w-3.5" />}
+            {isTrainingLocally ? "Training locally…" : "Start Local Training"}
+          </button>
+        ) : (
+          <p className="rounded-lg bg-background px-3 py-2 text-[11px] text-slate-500">
+            Local training needs the Desktop App — download it from the landing page, or switch to Cloud Training.
+          </p>
+        )}
+      </div>
+
       <div>
         <input
           ref={fileInputRef}
@@ -149,7 +276,7 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
           ) : (
             <Upload className="h-3.5 w-3.5" />
           )}
-          {bot.aiModelPath ? "Model uploaded — replace" : "Upload FreqAI model (.joblib)"}
+          {bot.aiModelPath ? "Model uploaded — replace manually" : "Or upload a .joblib model manually"}
         </button>
       </div>
 

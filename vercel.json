@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/train/cloud/reap",
+      "schedule": "*/15 * * * *"
+    }
+  ]
+}

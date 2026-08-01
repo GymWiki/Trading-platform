@@ -37,6 +37,20 @@ enum DeploymentStatus {
   INACTIVE
 }
 
+// How the user currently wants to train this bot's FreqAI model. Purely a
+// UI preference — the actual run history lives in TrainingJob.
+enum TrainingMode {
+  LOCAL
+  CLOUD
+}
+
+enum TrainingStatus {
+  QUEUED
+  TRAINING
+  COMPLETED
+  FAILED
+}
+
 model BotConfiguration {
   id     String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId String  @map("user_id") @db.Uuid
@@ -60,9 +74,39 @@ model BotConfiguration {
   hetznerServerId String? @map("hetzner_server_id")
   hetznerServerIp String? @map("hetzner_server_ip")
 
+  trainingMode TrainingMode    @default(LOCAL) @map("training_mode")
+  trainingJobs TrainingJob[]
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([userId])
   @@map("bot_configurations")
+}
+
+// One row per training attempt (local upload or cloud run), so status/errors
+// for an in-progress or past run can be surfaced in the dashboard.
+model TrainingJob {
+  id     String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  botId  String           @map("bot_id") @db.Uuid
+  bot    BotConfiguration @relation(fields: [botId], references: [id], onDelete: Cascade)
+  userId String           @map("user_id") @db.Uuid
+
+  mode   TrainingMode
+  status TrainingStatus @default(QUEUED)
+
+  // sha256 of the one-time bearer token handed to the ephemeral training VM
+  // so it can report status back without holding a real user session.
+  callbackTokenHash String @unique @map("callback_token_hash")
+
+  hetznerServerId String? @map("hetzner_server_id")
+  errorMessage    String? @map("error_message")
+  aiModelPath     String? @map("ai_model_path")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([botId])
+  @@index([status])
+  @@map("training_jobs")
 }

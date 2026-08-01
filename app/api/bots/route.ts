@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { encrypt } from "@/lib/encryption";
+import { botSelect, toBotDTO } from "@/lib/bot-select";
 
 export async function GET() {
   const supabase = await createClient();
@@ -15,22 +16,10 @@ export async function GET() {
   const bots = await prisma.botConfiguration.findMany({
     where: { userId: user.id },
     orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      botName: true,
-      exchangeName: true,
-      strategy: true,
-      pairWhitelist: true,
-      stakeAmount: true,
-      isPaperTrading: true,
-      deploymentStatus: true,
-      aiModelPath: true,
-      hetznerServerIp: true,
-      createdAt: true,
-    },
+    select: botSelect,
   });
 
-  return NextResponse.json({ bots });
+  return NextResponse.json({ bots: bots.map(toBotDTO) });
 }
 
 export async function POST(req: NextRequest) {
@@ -79,20 +68,8 @@ export async function POST(req: NextRequest) {
       isPaperTrading: isPaperTrading ?? true,
       deploymentStatus: "LOCAL",
     },
-    select: {
-      id: true,
-      botName: true,
-      exchangeName: true,
-      strategy: true,
-      pairWhitelist: true,
-      stakeAmount: true,
-      isPaperTrading: true,
-      deploymentStatus: true,
-      aiModelPath: true,
-      hetznerServerIp: true,
-      createdAt: true,
-    },
+    select: botSelect,
   });
 
-  return NextResponse.json({ bot }, { status: 201 });
+  return NextResponse.json({ bot: toBotDTO(bot) }, { status: 201 });
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Bot } from "lucide-react";
 import type { BotConfigurationDTO } from "@/lib/types";
 import { BotCard } from "@/components/BotCard";
@@ -11,8 +11,29 @@ interface BotFleetGridProps {
   vpsBotQuota: number;
 }
 
+const POLL_INTERVAL_MS = 10_000;
+
 export function BotFleetGrid({ initialBots }: BotFleetGridProps) {
   const [bots, setBots] = useState<BotConfigurationDTO[]>(initialBots);
+
+  const hasActiveTrainingJob = bots.some(
+    (b) => b.latestTrainingJob?.status === "QUEUED" || b.latestTrainingJob?.status === "TRAINING",
+  );
+
+  // Cloud training reports back asynchronously via a webhook the browser
+  // never sees directly, so poll the bot list while any job is in flight.
+  useEffect(() => {
+    if (!hasActiveTrainingJob) return;
+
+    const interval = setInterval(async () => {
+      const res = await fetch("/api/bots");
+      if (!res.ok) return;
+      const data = await res.json();
+      setBots(data.bots);
+    }, POLL_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, [hasActiveTrainingJob]);
 
   function handleUpdate(updated: BotConfigurationDTO) {
     setBots((prev) => prev.map((b) => (b.id === updated.id ? { ...b, ...updated } : b)));

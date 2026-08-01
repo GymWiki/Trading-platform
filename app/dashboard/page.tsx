@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { Navbar } from "@/components/Navbar";
 import { BotFleetGrid } from "@/components/BotFleetGrid";
+import { botSelect, toBotDTO } from "@/lib/bot-select";
 
 export default async function DashboardPage() {
   const supabase = await createClient();
@@ -22,23 +23,12 @@ export default async function DashboardPage() {
     prisma.botConfiguration.findMany({
       where: { userId: user.id },
       orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        botName: true,
-        exchangeName: true,
-        strategy: true,
-        pairWhitelist: true,
-        stakeAmount: true,
-        isPaperTrading: true,
-        deploymentStatus: true,
-        aiModelPath: true,
-        hetznerServerIp: true,
-        createdAt: true,
-      },
+      select: botSelect,
     }),
   ]);
 
-  const activeVpsBots = bots.filter((b) => b.deploymentStatus === "VPS_ACTIVE").length;
+  const botDTOs = bots.map(toBotDTO);
+  const activeVpsBots = botDTOs.filter((b) => b.deploymentStatus === "VPS_ACTIVE").length;
 
   return (
     <div className="min-h-screen bg-background">
@@ -53,7 +43,7 @@ export default async function DashboardPage() {
           </div>
         </div>
 
-        <BotFleetGrid initialBots={bots} vpsBotQuota={profile.vpsBotQuota} />
+        <BotFleetGrid initialBots={botDTOs} vpsBotQuota={profile.vpsBotQuota} />
       </main>
     </div>
   );

@@ -30,3 +30,7 @@ next-env.d.ts
 
 # prisma
 /prisma/dev.db
+
+# tauri (desktop app)
+/src-tauri/target/
+/src-tauri/gen/
