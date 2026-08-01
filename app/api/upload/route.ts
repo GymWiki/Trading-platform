@@ -1,15 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
-import { authOptions } from "@/lib/auth";
+import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 
 const MAX_FILE_SIZE_BYTES = 200 * 1024 * 1024; // 200MB
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -31,11 +33,11 @@ export async function POST(req: NextRequest) {
   }
 
   const bot = await prisma.botConfiguration.findUnique({ where: { id: botId } });
-  if (!bot || bot.userId !== session.user.id) {
+  if (!bot || bot.userId !== user.id) {
     return NextResponse.json({ error: "Bot not found" }, { status: 404 });
   }
 
-  const uploadDir = path.join(process.cwd(), "public", "uploads", session.user.id, botId);
+  const uploadDir = path.join(process.cwd(), "public", "uploads", user.id, botId);
   await mkdir(uploadDir, { recursive: true });
 
   const safeFileName = `model-${Date.now()}.joblib`;
@@ -43,7 +45,7 @@ export async function POST(req: NextRequest) {
   const buffer = Buffer.from(await file.arrayBuffer());
   await writeFile(destination, buffer);
 
-  const publicPath = `/uploads/${session.user.id}/${botId}/${safeFileName}`;
+  const publicPath = `/uploads/${user.id}/${botId}/${safeFileName}`;
 
   const updated = await prisma.botConfiguration.update({
     where: { id: botId },

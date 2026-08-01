@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { Bot } from "lucide-react";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { createClient } from "@/lib/supabase/server";
 import { SignInButton, SignOutButton } from "@/components/AuthButtons";
 
 export async function Navbar() {
-  const session = await getServerSession(authOptions);
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur">
@@ -15,7 +17,7 @@ export async function Navbar() {
           <span>Freqtrade Command Center</span>
         </Link>
         <div className="flex items-center gap-4">
-          {session ? (
+          {user ? (
             <>
               <Link
                 href="/dashboard"

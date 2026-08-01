@@ -3,18 +3,20 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // --- App models --------------------------------------------------------
 
-model User {
-  id       String  @id @default(cuid())
-  name     String?
-  email    String  @unique
-  // bcrypt hash — never selected into API responses in plaintext.
-  password String
+// Mirrors public.profiles in Supabase: one row per auth.users row, created
+// automatically by the on_auth_user_created trigger. Supabase Auth (GoTrue)
+// owns credentials/passwords in the auth schema — never modeled here.
+model Profile {
+  id String @id @db.Uuid
+
+  name String?
 
   // Stripe billing
   stripeCustomerId     String? @unique @map("stripe_customer_id")
@@ -26,7 +28,7 @@ model User {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  @@map("users")
+  @@map("profiles")
 }
 
 enum DeploymentStatus {
@@ -36,20 +38,20 @@ enum DeploymentStatus {
 }
 
 model BotConfiguration {
-  id     String @id @default(cuid())
-  userId String @map("user_id")
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String  @map("user_id") @db.Uuid
+  user   Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   botName      String @map("bot_name")
   exchangeName String @map("exchange_name")
 
   // Encrypted at rest (see lib/encryption.ts) — never returned to the client in plaintext.
-  exchangeApiKey    String @map("exchange_api_key") @db.Text
-  exchangeApiSecret String @map("exchange_api_secret") @db.Text
+  exchangeApiKey    String @map("exchange_api_key")
+  exchangeApiSecret String @map("exchange_api_secret")
 
   strategy       String
-  pairWhitelist  String @map("pair_whitelist") @db.Text // comma-separated pairs, e.g. "BTC/USDT,ETH/USDT"
-  stakeAmount    Float  @map("stake_amount")
+  pairWhitelist  String  @map("pair_whitelist") // comma-separated pairs, e.g. "BTC/USDT,ETH/USDT"
+  stakeAmount    Float   @map("stake_amount")
   isPaperTrading Boolean @default(true) @map("is_paper_trading")
 
   deploymentStatus DeploymentStatus @default(LOCAL) @map("deployment_status")

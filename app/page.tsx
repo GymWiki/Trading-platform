@@ -1,7 +1,6 @@
 import Link from "next/link";
-import { getServerSession } from "next-auth";
 import { ArrowRight, Cpu, Cloud, Download, ShieldCheck, Gauge, GitBranch } from "lucide-react";
-import { authOptions } from "@/lib/auth";
+import { createClient } from "@/lib/supabase/server";
 import { Navbar } from "@/components/Navbar";
 import { SignInButton } from "@/components/AuthButtons";
 
@@ -39,7 +38,10 @@ const FEATURES = [
 ];
 
 export default async function LandingPage() {
-  const session = await getServerSession(authOptions);
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   return (
     <div className="min-h-screen bg-background">
@@ -64,7 +66,7 @@ export default async function LandingPage() {
           </p>
 
           <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
-            {session ? (
+            {user ? (
               <Link
                 href="/dashboard"
                 className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-background transition hover:bg-primary-hover"
@@ -122,7 +124,7 @@ export default async function LandingPage() {
             dashboard if you already have a model ready to deploy.
           </p>
           <div className="mt-8 flex flex-col items-center justify-center gap-4 sm:flex-row">
-            {session ? (
+            {user ? (
               <Link
                 href="/dashboard"
                 className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-background transition hover:bg-primary-hover"

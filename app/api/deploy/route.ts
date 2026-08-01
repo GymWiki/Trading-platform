@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
 import { decrypt } from "@/lib/encryption";
 import { buildFreqtradeCloudInit, createHetznerServer } from "@/lib/hetzner";
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session) {
+  const supabase = await createClient();
+  const {
+    data: { user: authUser },
+  } = await supabase.auth.getUser();
+  if (!authUser) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -18,21 +20,21 @@ export async function POST(req: NextRequest) {
   }
 
   const bot = await prisma.botConfiguration.findUnique({ where: { id: botId } });
-  if (!bot || bot.userId !== session.user.id) {
+  if (!bot || bot.userId !== authUser.id) {
     return NextResponse.json({ error: "Bot not found" }, { status: 404 });
   }
   if (bot.deploymentStatus === "VPS_ACTIVE") {
     return NextResponse.json({ error: "Bot is already deployed" }, { status: 409 });
   }
 
-  const user = await prisma.user.findUniqueOrThrow({ where: { id: session.user.id } });
+  const profile = await prisma.profile.findUniqueOrThrow({ where: { id: authUser.id } });
   const activeVpsBots = await prisma.botConfiguration.count({
-    where: { userId: user.id, deploymentStatus: "VPS_ACTIVE" },
+    where: { userId: profile.id, deploymentStatus: "VPS_ACTIVE" },
   });
 
   // Not enough quota purchased — send the user to Stripe Checkout to bump
   // the quantity on their per-bot subscription before we provision anything.
-  if (activeVpsBots >= user.vpsBotQuota) {
+  if (activeVpsBots >= profile.vpsBotQuota) {
     const priceId = process.env.STRIPE_VPS_BOT_PRICE_ID;
     if (!priceId) {
       return NextResponse.json({ error: "Billing is not configured" }, { status: 500 });
@@ -40,13 +42,13 @@ export async function POST(req: NextRequest) {
 
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: "subscription",
-      client_reference_id: user.id,
-      customer: user.stripeCustomerId ?? undefined,
-      customer_email: user.stripeCustomerId ? undefined : user.email ?? undefined,
+      client_reference_id: profile.id,
+      customer: profile.stripeCustomerId ?? undefined,
+      customer_email: profile.stripeCustomerId ? undefined : authUser.email,
       line_items: [{ price: priceId, quantity: activeVpsBots + 1 }],
       success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard?checkout=success`,
       cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard?checkout=cancelled`,
-      metadata: { userId: user.id },
+      metadata: { userId: profile.id },
     });
 
     return NextResponse.json({ requiresCheckout: true, checkoutUrl: checkoutSession.url });

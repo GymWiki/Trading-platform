@@ -1,33 +1,42 @@
 import { redirect } from "next/navigation";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { Navbar } from "@/components/Navbar";
 import { BotFleetGrid } from "@/components/BotFleetGrid";
 
 export default async function DashboardPage() {
-  const session = await getServerSession(authOptions);
-  if (!session) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
     redirect("/login");
   }
 
-  const bots = await prisma.botConfiguration.findMany({
-    where: { userId: session.user.id },
-    orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      botName: true,
-      exchangeName: true,
-      strategy: true,
-      pairWhitelist: true,
-      stakeAmount: true,
-      isPaperTrading: true,
-      deploymentStatus: true,
-      aiModelPath: true,
-      hetznerServerIp: true,
-      createdAt: true,
-    },
-  });
+  const [profile, bots] = await Promise.all([
+    prisma.profile.findUniqueOrThrow({
+      where: { id: user.id },
+      select: { vpsBotQuota: true },
+    }),
+    prisma.botConfiguration.findMany({
+      where: { userId: user.id },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        botName: true,
+        exchangeName: true,
+        strategy: true,
+        pairWhitelist: true,
+        stakeAmount: true,
+        isPaperTrading: true,
+        deploymentStatus: true,
+        aiModelPath: true,
+        hetznerServerIp: true,
+        createdAt: true,
+      },
+    }),
+  ]);
 
   const activeVpsBots = bots.filter((b) => b.deploymentStatus === "VPS_ACTIVE").length;
 
@@ -39,12 +48,12 @@ export default async function DashboardPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Bot Fleet</h1>
             <p className="mt-1 text-sm text-slate-400">
-              {activeVpsBots} / {session.user.vpsBotQuota} cloud slots in use
+              {activeVpsBots} / {profile.vpsBotQuota} cloud slots in use
             </p>
           </div>
         </div>
 
-        <BotFleetGrid initialBots={bots} vpsBotQuota={session.user.vpsBotQuota} />
+        <BotFleetGrid initialBots={bots} vpsBotQuota={profile.vpsBotQuota} />
       </main>
     </div>
   );

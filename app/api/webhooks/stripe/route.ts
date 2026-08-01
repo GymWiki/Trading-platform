@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
       const session = event.data.object as Stripe.Checkout.Session;
       const userId = session.client_reference_id ?? session.metadata?.userId;
       if (userId && typeof session.customer === "string") {
-        await prisma.user.update({
+        await prisma.profile.update({
           where: { id: userId },
           data: {
             stripeCustomerId: session.customer,
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
       const quantity = subscription.items.data.reduce((sum, item) => sum + (item.quantity ?? 0), 0);
       const isActive = subscription.status === "active" || subscription.status === "trialing";
 
-      await prisma.user.updateMany({
+      await prisma.profile.updateMany({
         where: { stripeCustomerId: subscription.customer as string },
         data: {
           stripeSubscriptionId: subscription.id,
@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
 
     case "customer.subscription.deleted": {
       const subscription = event.data.object as Stripe.Subscription;
-      await prisma.user.updateMany({
+      await prisma.profile.updateMany({
         where: { stripeCustomerId: subscription.customer as string },
         data: { vpsBotQuota: 0 },
       });

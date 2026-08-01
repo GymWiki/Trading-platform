@@ -1,17 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { deleteHetznerServer } from "@/lib/hetzner";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  const session = await getServerSession(authOptions);
-  if (!session) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const bot = await prisma.botConfiguration.findUnique({ where: { id: params.id } });
-  if (!bot || bot.userId !== session.user.id) {
+  if (!bot || bot.userId !== user.id) {
     return NextResponse.json({ error: "Bot not found" }, { status: 404 });
   }
 
@@ -42,13 +44,16 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
-  const session = await getServerSession(authOptions);
-  if (!session) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const bot = await prisma.botConfiguration.findUnique({ where: { id: params.id } });
-  if (!bot || bot.userId !== session.user.id) {
+  if (!bot || bot.userId !== user.id) {
     return NextResponse.json({ error: "Bot not found" }, { status: 404 });
   }
 

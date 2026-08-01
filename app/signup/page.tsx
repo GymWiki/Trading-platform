@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
-import { signIn } from "next-auth/react";
-import { Bot, Loader2, Lock, Mail, User } from "lucide-react";
+import { Bot, CheckCircle2, Loader2, Lock, Mail, User } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -14,37 +14,64 @@ export default function SignupPage() {
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [needsEmailConfirmation, setNeedsEmailConfirmation] = useState(false);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     setIsSubmitting(true);
 
-    try {
-      const res = await fetch("/api/auth/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, password }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error ?? "Registreren is mislukt");
-      }
+    const supabase = createClient();
+    const { data, error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: { data: { name } },
+    });
 
-      const result = await signIn("credentials", { email, password, redirect: false });
-      if (!result || result.error) {
-        // Account is aangemaakt, maar automatisch inloggen lukte niet — stuur naar /login.
-        router.push("/login");
-        return;
-      }
+    setIsSubmitting(false);
 
-      router.push("/dashboard");
-      router.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Registreren is mislukt");
-    } finally {
-      setIsSubmitting(false);
+    if (signUpError) {
+      setError(
+        signUpError.message === "User already registered"
+          ? "Er bestaat al een account met dit e-mailadres"
+          : signUpError.message,
+      );
+      return;
     }
+
+    // Projects with "Confirm email" enabled don't return a session until the
+    // user clicks the confirmation link — send them to /login with a hint
+    // instead of a dashboard they can't actually reach yet.
+    if (!data.session) {
+      setNeedsEmailConfirmation(true);
+      return;
+    }
+
+    router.push("/dashboard");
+    router.refresh();
+  }
+
+  if (needsEmailConfirmation) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-6">
+        <div className="w-full max-w-sm text-center">
+          <div className="card-surface p-6">
+            <CheckCircle2 className="mx-auto h-10 w-10 text-primary" />
+            <h1 className="mt-4 text-lg font-semibold">Bevestig je e-mailadres</h1>
+            <p className="mt-2 text-sm text-slate-400">
+              We hebben een bevestigingslink gestuurd naar <strong>{email}</strong>. Klik op de link
+              om je account te activeren en daarna in te loggen.
+            </p>
+            <Link
+              href="/login"
+              className="mt-6 inline-block rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-background transition hover:bg-primary-hover"
+            >
+              Naar inloggen
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

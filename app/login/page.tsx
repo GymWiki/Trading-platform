@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState, type FormEvent } from "react";
-import { signIn } from "next-auth/react";
 import { Bot, Loader2, Lock, Mail } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
   return (
@@ -29,15 +29,12 @@ function LoginForm() {
     setError(null);
     setIsSubmitting(true);
 
-    const result = await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
-    });
+    const supabase = createClient();
+    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
 
     setIsSubmitting(false);
 
-    if (!result || result.error) {
+    if (signInError) {
       setError("Onjuiste e-mail of wachtwoord");
       return;
     }
