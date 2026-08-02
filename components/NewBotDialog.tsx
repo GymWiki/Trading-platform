@@ -1,16 +1,16 @@
 "use client";
 
-import { useId, useState, type FormEvent } from "react";
-import { Loader2, Plus, X } from "lucide-react";
-import type { BotConfigurationDTO } from "@/lib/types";
-import { ExchangeCombobox } from "@/components/ui/ExchangeCombobox";
+import { useEffect, useId, useState, type FormEvent } from "react";
+import Link from "next/link";
+import { Loader2, Plus, X, Link2, Check } from "lucide-react";
+import type { BotConfigurationDTO, ExchangeConnectionDTO } from "@/lib/types";
 import { InfoTooltip } from "@/components/ui/Tooltip";
 import { StrategyPicker } from "@/components/ui/StrategyPicker";
 import { PairSelector } from "@/components/ui/PairSelector";
-import { BudgetSlider } from "@/components/ui/BudgetSlider";
 import { Switch } from "@/components/ui/Switch";
 import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import { STRATEGY_PRESETS, type StrategyPreset } from "@/lib/strategy-presets";
+import { cn } from "@/lib/utils";
 
 interface NewBotDialogProps {
   onCreated: (bot: BotConfigurationDTO) => void;
@@ -20,14 +20,10 @@ const DEFAULT_STRATEGY = STRATEGY_PRESETS[0];
 
 const EMPTY_FORM = {
   botName: "",
-  exchangeName: EXCHANGE_PRESETS[0].id,
-  exchangeApiKey: "",
-  exchangeApiSecret: "",
+  exchangeConnectionId: "",
   strategyId: DEFAULT_STRATEGY.id,
   autoSelectCoins: true,
   pairs: ["BTC/USDT", "ETH/USDT"] as string[],
-  totalBudget: 500,
-  maxStakePercentage: 20,
 };
 
 export function NewBotDialog({ onCreated }: NewBotDialogProps) {
@@ -35,15 +31,34 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [connections, setConnections] = useState<ExchangeConnectionDTO[] | null>(null);
+
+  // Loaded fresh every time the dialog opens rather than once at mount —
+  // the user may well come straight back from /platforms having just
+  // connected an exchange, and a stale empty list would wrongly show the
+  // "no platforms yet" state.
+  useEffect(() => {
+    if (!open) return;
+    setConnections(null);
+    fetch("/api/platforms")
+      .then((res) => res.json())
+      .then((data) => setConnections(data.platforms.map((p: { connection: ExchangeConnectionDTO }) => p.connection).filter((c: ExchangeConnectionDTO) => c.isActive)))
+      .catch(() => setConnections([]));
+  }, [open]);
 
   const selectedStrategy: StrategyPreset =
     STRATEGY_PRESETS.find((s) => s.id === form.strategyId) ?? DEFAULT_STRATEGY;
-  const selectedExchange = EXCHANGE_PRESETS.find((e) => e.id === form.exchangeName);
+  const selectedConnection = connections?.find((c) => c.id === form.exchangeConnectionId);
+  const selectedExchange = selectedConnection && EXCHANGE_PRESETS.find((e) => e.id === selectedConnection.exchangeName);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
 
+    if (!form.exchangeConnectionId) {
+      setError("Kies een gekoppeld platform.");
+      return;
+    }
     if (!form.autoSelectCoins && form.pairs.length === 0) {
       setError("Kies minstens 1 handelspaar, of zet automatische coin-selectie aan.");
       return;
@@ -56,17 +71,12 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           botName: form.botName,
-          exchangeName: form.exchangeName,
-          exchangeApiKey: form.exchangeApiKey,
-          exchangeApiSecret: form.exchangeApiSecret,
+          exchangeConnectionId: form.exchangeConnectionId,
           strategy: selectedStrategy.className,
           strategyCode: selectedStrategy.code,
           freqaiConfig: selectedStrategy.freqaiConfig,
           autoSelectCoins: form.autoSelectCoins,
           pairWhitelist: form.autoSelectCoins ? undefined : form.pairs.join(","),
-          totalBudget: form.totalBudget,
-          maxStakePercentage: form.maxStakePercentage,
-          isPaperTrading: true,
         }),
       });
       const data = await res.json();
@@ -101,7 +111,8 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
           <div>
             <h2 className="font-semibold">Nieuwe AI-bot instellen</h2>
             <p className="text-xs text-slate-400">
-              Elke bot handelt met FreqAI. Geen technische kennis nodig — kies gewoon het AI-gedrag dat bij je past.
+              Elke bot handelt met FreqAI en start in Paper Trading — pas als jij dat wilt, schakel je over naar
+              live geld.
             </p>
           </div>
           <button type="button" onClick={() => setOpen(false)} className="text-slate-400 hover:text-white">
@@ -121,48 +132,64 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
               />
             </Field>
 
-            <FieldGroup label="Exchange">
-              <ExchangeCombobox
-                value={form.exchangeName}
-                onChange={(exchangeName) => setForm({ ...form, exchangeName })}
-                aria-label="Exchange"
-              />
+            <FieldGroup label="Platform">
+              {connections === null ? (
+                <div className="flex items-center justify-center rounded-lg border border-border bg-background py-6">
+                  <Loader2 className="h-4 w-4 animate-spin text-slate-500" />
+                </div>
+              ) : connections.length === 0 ? (
+                <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border bg-background px-4 py-6 text-center">
+                  <Link2 className="h-6 w-6 text-slate-600" />
+                  <p className="text-xs text-slate-400">
+                    Je hebt nog geen platform gekoppeld. Koppel eerst een exchange om een bot aan te maken.
+                  </p>
+                  <Link
+                    href="/platforms"
+                    className="mt-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-background transition hover:bg-primary-hover"
+                  >
+                    Platform koppelen
+                  </Link>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {connections.map((connection) => {
+                    const preset = EXCHANGE_PRESETS.find((e) => e.id === connection.exchangeName);
+                    const checked = connection.id === form.exchangeConnectionId;
+                    return (
+                      <button
+                        key={connection.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={checked}
+                        onClick={() => setForm({ ...form, exchangeConnectionId: connection.id })}
+                        className={cn(
+                          "flex items-center gap-2.5 rounded-lg border p-2.5 text-left transition",
+                          checked ? "border-primary bg-primary/10" : "border-border bg-background hover:border-primary/40",
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold",
+                            preset?.color ?? "bg-slate-500/20 text-slate-300",
+                          )}
+                        >
+                          {preset?.monogram ?? "?"}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                          {preset?.label ?? connection.exchangeName}
+                        </span>
+                        {checked && <Check className="h-4 w-4 shrink-0 text-primary" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               {selectedExchange && (
                 <p className="mt-2 rounded-lg bg-background px-3 py-2 text-[11px] leading-relaxed text-slate-400">
                   {selectedExchange.feeNote}
                 </p>
               )}
             </FieldGroup>
-
-            <Field
-              label="API-key"
-              tooltip="Te vinden in de instellingen van je exchange-account. Geef deze key alleen trading-rechten, nooit opname-rechten (withdraw)."
-            >
-              <input
-                required
-                type="password"
-                autoComplete="off"
-                value={form.exchangeApiKey}
-                onChange={(e) => setForm({ ...form, exchangeApiKey: e.target.value })}
-                className="input"
-                placeholder="••••••••••••"
-              />
-            </Field>
-
-            <Field
-              label="API-secret"
-              tooltip="Het bijbehorende geheime deel van je API-key. Wordt versleuteld opgeslagen en nooit getoond."
-            >
-              <input
-                required
-                type="password"
-                autoComplete="off"
-                value={form.exchangeApiSecret}
-                onChange={(e) => setForm({ ...form, exchangeApiSecret: e.target.value })}
-                className="input"
-                placeholder="••••••••••••"
-              />
-            </Field>
 
             <FieldGroup label="AI-gedrag">
               <StrategyPicker
@@ -197,17 +224,11 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
               </div>
             </FieldGroup>
 
-            <FieldGroup
-              label="Totaal Bot Budget (USDT)"
-              tooltip="Het totale bedrag dat de bot mag gebruiken. Bij paper trading wordt hier niet écht mee gehandeld."
-            >
-              <BudgetSlider
-                totalBudget={form.totalBudget}
-                maxStakePercentage={form.maxStakePercentage}
-                onBudgetChange={(totalBudget) => setForm({ ...form, totalBudget })}
-                onPercentageChange={(maxStakePercentage) => setForm({ ...form, maxStakePercentage })}
-              />
-            </FieldGroup>
+            <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2.5 text-[11px] leading-relaxed text-emerald-300">
+              Deze bot start automatisch in <strong>Paper Trading</strong> — geen budget nodig, geen echt geld op
+              het spel. Zodra je tevreden bent met de (virtuele) resultaten, activeer je live trading vanaf de
+              bot-kaart.
+            </p>
 
             {error && (
               <p role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
@@ -218,11 +239,11 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
 
           <button
             type="submit"
-            disabled={isSubmitting}
+            disabled={isSubmitting || !connections?.length}
             className="mt-4 flex w-full shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-background transition hover:bg-primary-hover disabled:opacity-50"
           >
             {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
-            Bot aanmaken
+            Bot aanmaken (Paper Trading)
           </button>
         </form>
       </div>
@@ -253,14 +274,15 @@ function Field({
 }
 
 // For a field built from a composite widget with multiple interactive
-// descendants (Select, StrategyPicker, PairSelector). Wrapping several
-// buttons in a native <label> is a real bug, not just a style nit: once a
-// click handler mutates the DOM (e.g. removing the first button), the
-// browser's own label-click-forwarding step re-evaluates "the label's
-// control" against the *new* DOM and fires a second, spurious click on
-// whatever button ends up first — observed here as removing one selected
-// pair silently removing a second one too. A plain group with
-// aria-labelledby gives the same accessible name without that behavior.
+// descendants (StrategyPicker, PairSelector, the platform picker above).
+// Wrapping several buttons in a native <label> is a real bug, not just a
+// style nit: once a click handler mutates the DOM (e.g. removing the
+// first button), the browser's own label-click-forwarding step
+// re-evaluates "the label's control" against the *new* DOM and fires a
+// second, spurious click on whatever button ends up first — observed
+// here as removing one selected pair silently removing a second one too.
+// A plain group with aria-labelledby gives the same accessible name
+// without that behavior.
 function FieldGroup({
   label,
   tooltip,

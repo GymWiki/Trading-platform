@@ -1,10 +1,12 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Download, Rocket, Upload, Loader2, CheckCircle2, Trash2, Cloud, Laptop, KeyRound, Copy, Check } from "lucide-react";
+import { Download, Rocket, Upload, Loader2, CheckCircle2, Trash2, Cloud, Laptop, KeyRound, Copy, Check, Zap } from "lucide-react";
 import type { BotConfigurationDTO } from "@/lib/types";
 import { StatusBadge, TrainingStatusBadge } from "@/components/ui/StatusBadge";
-import { PaperLiveToggle, TrainingModeToggle } from "@/components/ui/Toggle";
+import { TrainingModeToggle } from "@/components/ui/Toggle";
+import { GoLiveModal } from "@/components/GoLiveModal";
+import { DEFAULT_PAPER_TOTAL_BUDGET, DEFAULT_PAPER_MAX_STAKE_PERCENTAGE } from "@/lib/paper-trading-defaults";
 import { isTauri } from "@/lib/tauri";
 
 interface BotCardProps {
@@ -15,7 +17,6 @@ interface BotCardProps {
 
 export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [isTogglingMode, setIsTogglingMode] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [isTrainingLocally, setIsTrainingLocally] = useState(false);
@@ -24,27 +25,10 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   const [apiCredentials, setApiCredentials] = useState<{ username: string; password: string } | null>(null);
   const [copiedField, setCopiedField] = useState<"username" | "password" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isGoLiveOpen, setIsGoLiveOpen] = useState(false);
 
   const jobActive = bot.latestTrainingJob?.status === "QUEUED" || bot.latestTrainingJob?.status === "TRAINING";
-
-  async function handleToggle(isPaperTrading: boolean) {
-    setError(null);
-    setIsTogglingMode(true);
-    try {
-      const res = await fetch(`/api/bots/${bot.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isPaperTrading }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to update bot");
-      onUpdate(data.bot);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update bot");
-    } finally {
-      setIsTogglingMode(false);
-    }
-  }
+  const canGoLive = bot.status === "TRAINING_PAPER_TRADE" && bot.deploymentStatus === "VPS_ACTIVE";
 
   async function handleTrainingModeChange(trainingMode: "LOCAL" | "CLOUD") {
     setError(null);
@@ -151,7 +135,10 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
         : bot.pairWhitelist?.split(",").map((p) => p.trim()) ?? null,
       pairlist_method: bot.autoSelectCoins ? "VolumePairList (top 30 USDT by volume)" : "StaticPairList",
       stake_amount: "unlimited",
-      custom_user_settings: { total_budget: bot.totalBudget, max_stake_pct: bot.maxStakePercentage },
+      custom_user_settings: {
+        total_budget: bot.totalBudget ?? DEFAULT_PAPER_TOTAL_BUDGET,
+        max_stake_pct: bot.maxStakePercentage ?? DEFAULT_PAPER_MAX_STAKE_PERCENTAGE,
+      },
       dry_run: bot.isPaperTrading,
       ai_model_path: bot.aiModelPath ?? null,
       note: "Fill in your exchange API key/secret locally — they are never exported from the dashboard.",
@@ -225,20 +212,49 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
           <p className="text-xs text-slate-400">
             {bot.exchangeName} &middot; {bot.strategy}
           </p>
-          <p className="mt-0.5 text-[11px] text-slate-500">
-            Budget: €{bot.totalBudget.toLocaleString("nl-NL")} &middot; max €
-            {((bot.totalBudget * bot.maxStakePercentage) / 100).toLocaleString("nl-NL", { maximumFractionDigits: 2 })} per
-            trade ({bot.maxStakePercentage}%)
-          </p>
+          {bot.totalBudget !== null && bot.maxStakePercentage !== null ? (
+            <p className="mt-0.5 text-[11px] text-slate-500">
+              Budget: €{bot.totalBudget.toLocaleString("nl-NL")} &middot; max €
+              {((bot.totalBudget * bot.maxStakePercentage) / 100).toLocaleString("nl-NL", { maximumFractionDigits: 2 })} per
+              trade ({bot.maxStakePercentage}%)
+            </p>
+          ) : (
+            <p className="mt-0.5 text-[11px] text-slate-500">Paper trading — nog geen live budget ingesteld</p>
+          )}
         </div>
         <StatusBadge status={bot.deploymentStatus} />
       </div>
 
-      <PaperLiveToggle
-        isPaperTrading={bot.isPaperTrading}
-        onChange={handleToggle}
-        disabled={isTogglingMode}
-      />
+      <div
+        className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs font-medium ${
+          bot.status === "LIVE_TRADING"
+            ? "border-red-500/40 bg-red-500/10 text-red-300"
+            : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+        }`}
+      >
+        <span>{bot.status === "LIVE_TRADING" ? "Live Trading" : "Paper Trading"}</span>
+        {canGoLive && (
+          <button
+            type="button"
+            onClick={() => setIsGoLiveOpen(true)}
+            className="flex items-center gap-1.5 rounded-md bg-emerald-500 px-2.5 py-1 text-[11px] font-semibold text-background transition hover:bg-emerald-400"
+          >
+            <Zap className="h-3 w-3" />
+            Activeer Live Trading
+          </button>
+        )}
+      </div>
+
+      {isGoLiveOpen && (
+        <GoLiveModal
+          bot={bot}
+          onClose={() => setIsGoLiveOpen(false)}
+          onLive={(updated) => {
+            onUpdate(updated);
+            setIsGoLiveOpen(false);
+          }}
+        />
+      )}
 
       <div className="space-y-2 rounded-lg border border-border p-3">
         <TrainingModeToggle

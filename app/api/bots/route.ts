@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
-import { encrypt } from "@/lib/encryption";
 import { botSelect, toBotDTO } from "@/lib/bot-select";
-import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import {
   isSafePythonIdentifier,
   strategyCodeDefinesClass,
@@ -41,31 +39,24 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const {
     botName,
-    exchangeName,
-    exchangeApiKey,
-    exchangeApiSecret,
+    exchangeConnectionId,
     strategy,
     strategyCode,
     freqaiConfig,
     autoSelectCoins,
     pairWhitelist,
-    totalBudget,
-    maxStakePercentage,
-    isPaperTrading,
   } = body ?? {};
 
-  if (
-    !botName ||
-    !exchangeName ||
-    !exchangeApiKey ||
-    !exchangeApiSecret ||
-    !strategy ||
-    !strategyCode ||
-    !freqaiConfig ||
-    typeof totalBudget !== "number" ||
-    typeof maxStakePercentage !== "number"
-  ) {
+  if (!botName || !exchangeConnectionId || !strategy || !strategyCode || !freqaiConfig) {
     return NextResponse.json({ error: "Missing required bot configuration fields" }, { status: 400 });
+  }
+
+  // Must be a platform this user actually linked (see /platforms) — a bot
+  // never holds its own exchange credentials anymore, only a reference to
+  // one of the user's ExchangeConnection rows.
+  const connection = await prisma.exchangeConnection.findUnique({ where: { id: exchangeConnectionId } });
+  if (!connection || connection.userId !== user.id || !connection.isActive) {
+    return NextResponse.json({ error: "exchangeConnectionId is not a valid, linked platform" }, { status: 400 });
   }
 
   // Defaults to on (matches BotConfiguration.autoSelectCoins @default(true))
@@ -82,24 +73,6 @@ export async function POST(req: NextRequest) {
       { error: "pairWhitelist is required when auto-select is off — pick at least one pair" },
       { status: 400 },
     );
-  }
-
-  // Closed list, not free text (see lib/exchange-presets.ts) — exchangeName
-  // becomes the ccxt exchange id in the generated config.json, so an
-  // unsupported or misspelled value must be rejected here rather than
-  // surface as a cryptic failure deep in a cloud-init run.
-  if (!EXCHANGE_PRESETS.some((e) => e.id === exchangeName)) {
-    return NextResponse.json({ error: "exchangeName is not a supported exchange" }, { status: 400 });
-  }
-
-  if (!(totalBudget > 0)) {
-    return NextResponse.json({ error: "totalBudget must be a positive number" }, { status: 400 });
-  }
-  // Mirrors the UI slider's range (see components/ui/BudgetSlider.tsx) — the
-  // hard cap custom_stake_amount enforces in the deployed strategy code is
-  // only as trustworthy as the value we accept here.
-  if (maxStakePercentage < 10 || maxStakePercentage > 100) {
-    return NextResponse.json({ error: "maxStakePercentage must be between 10 and 100" }, { status: 400 });
   }
 
   // Every bot runs on FreqAI — this is the training/feature/risk config for
@@ -132,21 +105,23 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // "Try before you risk": every bot is created in paper trading, with no
+  // budget at stake — totalBudget/maxStakePercentage stay null until the
+  // user clears the Go Live flow (see app/api/bots/[id]/golive). There is
+  // deliberately no way to pass those in, or to skip straight to live, at
+  // creation time.
   const bot = await prisma.botConfiguration.create({
     data: {
       userId: user.id,
       botName,
-      exchangeName,
-      exchangeApiKey: encrypt(exchangeApiKey),
-      exchangeApiSecret: encrypt(exchangeApiSecret),
+      exchangeConnectionId: connection.id,
+      exchangeName: connection.exchangeName,
       strategy,
       strategyCode,
       freqaiConfig,
       autoSelectCoins: autoSelect,
       pairWhitelist: autoSelect ? null : pairWhitelist,
-      totalBudget,
-      maxStakePercentage,
-      isPaperTrading: isPaperTrading ?? true,
+      isPaperTrading: true,
       deploymentStatus: "LOCAL",
     },
     select: botSelect,

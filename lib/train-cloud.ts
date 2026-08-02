@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { decrypt } from "@/lib/encryption";
 import { buildFreqAITrainingCloudInit, createHetznerServer } from "@/lib/hetzner";
+import { DEFAULT_PAPER_TOTAL_BUDGET, DEFAULT_PAPER_MAX_STAKE_PERCENTAGE } from "@/lib/paper-trading-defaults";
 import { generateCallbackToken, hashCallbackToken } from "@/lib/training-token";
 import { stopBot, forceExitAll } from "@/lib/freqtrade-client";
 import type { FreqAIProfileConfig } from "@/lib/strategy-presets";
@@ -14,16 +15,17 @@ export class TrainingBusyError extends Error {}
 
 interface StartCloudTrainingParams {
   bot: BotRow;
-  /** Force-close open positions before pausing, instead of just halting new entries. Only meaningful if the bot is currently TRADING. */
+  /** Force-close open positions before pausing, instead of just halting new entries. Only meaningful if the bot is currently deployed (paper or live). */
   cancelOpenOrders?: boolean;
 }
 
 // The single place a cloud training job gets created — called directly by
 // POST /api/train/cloud (user clicked "Start Cloud Training") and by
-// POST /api/bots/[id]/status handling a "retrain_needed" event from a live
-// bot. Both paths get the same priority guarantee for free: if the bot is
-// currently TRADING, it is genuinely paused (via its own freqtrade REST
-// API, not just a database flag) before any training bookkeeping happens.
+// POST /api/bots/[id]/status handling a "retrain_needed" event from a
+// deployed bot. Both paths get the same priority guarantee for free: if
+// the bot is currently deployed — paper or live, both actually run the
+// freqtrade loop — it is genuinely paused (via its own freqtrade REST API,
+// not just a database flag) before any training bookkeeping happens.
 export async function startCloudTrainingJob({ bot, cancelOpenOrders = false }: StartCloudTrainingParams) {
   const activeJob = await prisma.trainingJob.findFirst({
     where: { botId: bot.id, status: { in: ["QUEUED", "TRAINING"] } },
@@ -40,13 +42,16 @@ export async function startCloudTrainingJob({ bot, cancelOpenOrders = false }: S
   const hetznerApiToken = process.env.HETZNER_API_TOKEN;
   if (!hetznerApiToken) throw new Error("HETZNER_API_TOKEN is not configured");
 
-  // Priority rule: training/updating always wins over active trading, and
-  // the pause must be real, not just a status label — hence the freqtrade
-  // API call, using this bot's own per-deployment credentials.
-  const wasTrading = bot.status === "TRADING";
-  if (wasTrading) {
+  // Priority rule: training/updating always wins over active trading
+  // (paper or live), and the pause must be real, not just a status label —
+  // hence the freqtrade API call, using this bot's own per-deployment
+  // credentials. deployBotToVps derives the resume status from
+  // isPaperTrading, so whichever phase this was in is exactly what it
+  // resumes to.
+  const wasDeployed = bot.status === "TRAINING_PAPER_TRADE" || bot.status === "LIVE_TRADING";
+  if (wasDeployed) {
     if (!bot.hetznerServerIp || !bot.apiServerUsername || !bot.apiServerPassword) {
-      throw new Error("Bot is TRADING but has no reachable API credentials — refusing to start a retrain blind");
+      throw new Error(`Bot is ${bot.status} but has no reachable API credentials — refusing to start a retrain blind`);
     }
     const creds = {
       serverIp: bot.hetznerServerIp,
@@ -61,7 +66,7 @@ export async function startCloudTrainingJob({ bot, cancelOpenOrders = false }: S
 
   await prisma.botConfiguration.update({
     where: { id: bot.id },
-    data: { status: wasTrading ? "UPDATING_MODEL" : "TRAINING", trainingMode: "CLOUD" },
+    data: { status: wasDeployed ? "UPDATING_MODEL" : "TRAINING", trainingMode: "CLOUD" },
   });
 
   const callbackToken = generateCallbackToken();
@@ -84,8 +89,8 @@ export async function startCloudTrainingJob({ bot, cancelOpenOrders = false }: S
       freqaiConfig: bot.freqaiConfig as unknown as FreqAIProfileConfig,
       autoSelectCoins: bot.autoSelectCoins,
       pairWhitelist: bot.pairWhitelist ? bot.pairWhitelist.split(",").map((p) => p.trim()).filter(Boolean) : [],
-      totalBudget: bot.totalBudget,
-      maxStakePercentage: bot.maxStakePercentage,
+      totalBudget: bot.totalBudget ?? DEFAULT_PAPER_TOTAL_BUDGET,
+      maxStakePercentage: bot.maxStakePercentage ?? DEFAULT_PAPER_MAX_STAKE_PERCENTAGE,
       uploadUrlEndpoint: `${appUrl}/api/train/cloud/upload-url`,
       callbackUrl: `${appUrl}/api/train/cloud/callback`,
       callbackToken,

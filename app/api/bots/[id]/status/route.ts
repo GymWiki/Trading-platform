@@ -71,24 +71,28 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         });
         return NextResponse.json({ error: errMessage }, { status: 502 });
       }
+      // Resumes to whichever phase this bot was actually in before the
+      // pause — isPaperTrading is the single source of truth for that,
+      // never touched by a retrain.
+      const resumedStatus = bot.isPaperTrading ? "TRAINING_PAPER_TRADE" : "LIVE_TRADING";
       await prisma.botConfiguration.update({
         where: { id: bot.id },
-        data: { status: "TRADING", lastError: null },
+        data: { status: resumedStatus, lastError: null },
       });
-      return NextResponse.json({ ok: true, status: "TRADING" });
+      return NextResponse.json({ ok: true, status: resumedStatus });
     }
 
-    // The live bot (or its custom FreqAI model class) has decided its model
-    // is stale. Priority rule: training/updating always wins over trading —
-    // startCloudTrainingJob genuinely pauses the bot via its own freqtrade
-    // API before touching any training bookkeeping.
+    // The deployed bot (or its custom FreqAI model class) has decided its
+    // model is stale. Priority rule: training/updating always wins over
+    // trading (paper or live) — startCloudTrainingJob genuinely pauses the
+    // bot via its own freqtrade API before touching any training bookkeeping.
     case "retrain_needed": {
       if (bot.status === "UPDATING_MODEL") {
         return NextResponse.json({ ok: true, status: "UPDATING_MODEL", note: "already updating" });
       }
-      if (bot.status !== "TRADING") {
+      if (bot.status !== "TRAINING_PAPER_TRADE" && bot.status !== "LIVE_TRADING") {
         return NextResponse.json(
-          { error: `Bot is ${bot.status}, not TRADING — nothing to pause for a retrain` },
+          { error: `Bot is ${bot.status}, not deployed — nothing to pause for a retrain` },
           { status: 409 },
         );
       }

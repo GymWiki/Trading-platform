@@ -22,8 +22,10 @@
     "@supabase/supabase-js": "^2.111.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-fs": "^2.5.1",
+    "ccxt": "^4.5.70",
     "lucide-react": "^0.454.0",
     "next": "14.2.35",
+    "protobufjs": "^7.6.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "stripe": "^17.2.1"

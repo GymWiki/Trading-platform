@@ -7,6 +7,7 @@ import { buildFreqtradeCloudInit, createHetznerServer, deleteHetznerServer } fro
 import { botSelect, toBotDTO } from "@/lib/bot-select";
 import { generateCallbackToken, hashCallbackToken } from "@/lib/training-token";
 import type { FreqAIProfileConfig } from "@/lib/strategy-presets";
+import { DEFAULT_PAPER_TOTAL_BUDGET, DEFAULT_PAPER_MAX_STAKE_PERCENTAGE } from "@/lib/paper-trading-defaults";
 
 type BotRow = Prisma.BotConfigurationGetPayload<object>;
 
@@ -15,14 +16,18 @@ interface DeployBotParams {
   supabase: SupabaseClient;
 }
 
-// The single provisioning primitive behind two call sites with different
+// The single provisioning primitive behind three call sites with different
 // policy: POST /api/deploy (first-ever deploy — checked for quota, billing,
-// and BotStatus there before calling this) and the training callback's
+// and BotStatus there before calling this), the training callback's
 // resume-after-retrain path (deliberately calls this WHILE status is
-// UPDATING_MODEL, since resolving that status is the whole point). This
-// function itself only asserts the one precondition both callers share —
-// a trained model must exist — never BotStatus, so it must not be called
-// directly from anywhere that hasn't already applied the right guard.
+// UPDATING_MODEL, since resolving that status is the whole point), and
+// the Go Live flow (app/api/bots/[id]/golive, called right after flipping
+// isPaperTrading to false). This function itself only asserts the one
+// precondition every caller shares — a trained model must exist — never
+// BotStatus, so it must not be called directly from anywhere that hasn't
+// already applied the right guard. The resulting status is always derived
+// from bot.isPaperTrading rather than hardcoded, so a redeploy naturally
+// resumes to whichever phase (paper or live) the bot was actually in.
 export async function deployBotToVps({ bot, supabase }: DeployBotParams) {
   if (!bot.aiModelPath) {
     throw new Error("Upload a trained .joblib model before deploying");
@@ -30,6 +35,11 @@ export async function deployBotToVps({ bot, supabase }: DeployBotParams) {
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   if (!appUrl) throw new Error("NEXT_PUBLIC_APP_URL is not configured");
+
+  // Bots no longer carry their own exchange credentials — they reference a
+  // linked ExchangeConnection (see /platforms) instead, so the real keys
+  // live there and are fetched fresh on every (re)deploy.
+  const connection = await prisma.exchangeConnection.findUniqueOrThrow({ where: { id: bot.exchangeConnectionId } });
 
   // The "models" bucket is private, so the Hetzner VPS (which has no
   // Supabase session) needs a short-lived signed URL to fetch the file
@@ -51,15 +61,15 @@ export async function deployBotToVps({ bot, supabase }: DeployBotParams) {
   const cloudInit = buildFreqtradeCloudInit({
     botName: bot.botName.toLowerCase().replace(/[^a-z0-9-]/g, "-"),
     exchangeName: bot.exchangeName,
-    exchangeApiKey: decrypt(bot.exchangeApiKey),
-    exchangeApiSecret: decrypt(bot.exchangeApiSecret),
+    exchangeApiKey: decrypt(connection.apiKey),
+    exchangeApiSecret: decrypt(connection.apiSecret),
     strategy: bot.strategy,
     strategyCode: bot.strategyCode,
     freqaiConfig: bot.freqaiConfig as unknown as FreqAIProfileConfig,
     autoSelectCoins: bot.autoSelectCoins,
     pairWhitelist: bot.pairWhitelist ? bot.pairWhitelist.split(",").map((p) => p.trim()).filter(Boolean) : [],
-    totalBudget: bot.totalBudget,
-    maxStakePercentage: bot.maxStakePercentage,
+    totalBudget: bot.totalBudget ?? DEFAULT_PAPER_TOTAL_BUDGET,
+    maxStakePercentage: bot.maxStakePercentage ?? DEFAULT_PAPER_MAX_STAKE_PERCENTAGE,
     isPaperTrading: bot.isPaperTrading,
     aiModelDownloadUrl: signedUrlData.signedUrl,
     apiServerUsername,
@@ -92,7 +102,7 @@ export async function deployBotToVps({ bot, supabase }: DeployBotParams) {
     where: { id: bot.id },
     data: {
       deploymentStatus: "VPS_ACTIVE",
-      status: "TRADING",
+      status: bot.isPaperTrading ? "TRAINING_PAPER_TRADE" : "LIVE_TRADING",
       hetznerServerId: String(server.id),
       hetznerServerIp: server.public_net?.ipv4?.ip ?? null,
       apiServerUsername,

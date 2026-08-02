@@ -64,13 +64,14 @@ export async function POST(req: NextRequest) {
     });
 
     if (bot.status === "UPDATING_MODEL") {
-      // This training run was a retrain for an already-live bot (see
+      // This training run was a retrain for an already-deployed bot (see
       // lib/train-cloud.ts, which paused it before creating this job) — the
       // priority cycle only completes once the new model is actually
       // redeployed and trading resumes. Hetzner doesn't support re-running
       // cloud-init on an existing server, so "redeploy" here means
       // delete-and-recreate with the new model — deployBotToVps handles
-      // that and sets status back to TRADING on success.
+      // that and resumes to TRAINING_PAPER_TRADE or LIVE_TRADING (whichever
+      // isPaperTrading says this bot actually was) on success.
       const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
       try {
         if (!serviceRoleKey) throw new Error("SUPABASE_SERVICE_ROLE_KEY is not configured");
@@ -87,7 +88,8 @@ export async function POST(req: NextRequest) {
     } else if (bot.status === "TRAINING") {
       // First-ever training for a bot that was never deployed — nothing to
       // resume, just clear the way for a manual "Deploy to Cloud" click.
-      await prisma.botConfiguration.update({ where: { id: bot.id }, data: { status: "IDLE" } });
+      // Every bot starts (and returns to) paper trading by default.
+      await prisma.botConfiguration.update({ where: { id: bot.id }, data: { status: "TRAINING_PAPER_TRADE" } });
     }
   } else if (finalStatus === "FAILED" && bot) {
     // Deliberately left paused (if it was UPDATING_MODEL) rather than

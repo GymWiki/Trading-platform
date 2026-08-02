@@ -1,9 +1,13 @@
-// The state machine gating live trading. Every code path that could cause a
-// bot to start or resume trading — right now that's exclusively
-// /api/deploy, plus the resume step after a retrain finishes — must check
-// this before doing anything. TRAINING and UPDATING_MODEL are the two
-// statuses live trading may never overlap with.
-export type BotStatus = "IDLE" | "TRAINING" | "TRADING" | "UPDATING_MODEL" | "ERROR";
+// The state machine gating trading — paper or live. Every code path that
+// could cause a bot to start or resume trading — /api/deploy, the Go Live
+// flow (app/api/bots/[id]/golive), plus the resume step after a retrain
+// finishes — must check this before doing anything. TRAINING and
+// UPDATING_MODEL are the two statuses trading may never overlap with.
+//
+// "Try before you risk": every bot is born (and stays) in
+// TRAINING_PAPER_TRADE until it clears Go Live — see the enum doc comment
+// in prisma/schema.prisma for the full state machine.
+export type BotStatus = "TRAINING_PAPER_TRADE" | "TRAINING" | "LIVE_TRADING" | "UPDATING_MODEL" | "ERROR";
 
 const TRADING_BLOCKED_STATUSES: ReadonlySet<BotStatus> = new Set(["TRAINING", "UPDATING_MODEL"]);
 

@@ -23,7 +23,8 @@ model Profile {
   stripeSubscriptionId String? @unique @map("stripe_subscription_id")
   vpsBotQuota          Int     @default(0) @map("vps_bot_quota")
 
-  bots BotConfiguration[]
+  bots                BotConfiguration[]
+  exchangeConnections ExchangeConnection[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -53,20 +54,71 @@ enum TrainingStatus {
 
 // Operational lifecycle of the bot itself — distinct from TrainingStatus,
 // which tracks a single training run. TRAINING/UPDATING_MODEL are the
-// statuses that must never overlap with live trading: see
+// statuses that must never overlap with trading (paper or live): see
 // lib/bot-status.ts (canTrade/assertCanTrade), which every code path that
 // could start or resume trading is required to check.
-//   IDLE           not yet deployed, or deployed but intentionally stopped
-//   TRAINING       first-ever model training in progress, not deployed yet
-//   TRADING        deployed and actively trading (or paper trading)
-//   UPDATING_MODEL was TRADING, now paused while a retrain is in progress
-//   ERROR          a deploy, training, or pause/resume action failed
+//
+// "Try before you risk": every bot is born (and stays) in
+// TRAINING_PAPER_TRADE until the user explicitly clears the Go Live flow
+// (see app/api/bots/[id]/golive) — there is no separate "not deployed yet"
+// status anymore, since paper trading carries no financial risk to gate.
+//   TRAINING_PAPER_TRADE  default from creation onward — not yet deployed,
+//                         mid first-training, or deployed and dry-run
+//                         trading. isPaperTrading is true throughout.
+//   TRAINING              first-ever model training in progress
+//   LIVE_TRADING          cleared Go Live — deployed with real funds,
+//                         isPaperTrading is false
+//   UPDATING_MODEL        was TRAINING_PAPER_TRADE or LIVE_TRADING, now
+//                         paused while a retrain is in progress; resumes
+//                         to whichever it was (see lib/deploy-bot.ts,
+//                         which derives the resume status from
+//                         isPaperTrading rather than hardcoding one)
+//   ERROR                 a deploy, training, or pause/resume action failed
 enum BotStatus {
-  IDLE
+  TRAINING_PAPER_TRADE
   TRAINING
-  TRADING
+  LIVE_TRADING
   UPDATING_MODEL
   ERROR
+}
+
+// A user's linked exchange account — added credentials once, reused by any
+// number of bots. Splitting this out of BotConfiguration (which used to
+// hold its own exchangeApiKey/exchangeApiSecret) is what makes the
+// /platforms "connect once, see your balance" flow and the Go Live balance
+// check possible: both need to query a real exchange balance independent
+// of any particular bot.
+model ExchangeConnection {
+  id     String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String  @map("user_id") @db.Uuid
+  user   Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Closed list validated against EXCHANGE_PRESETS ids (see
+  // lib/exchange-presets.ts) at the API boundary — kept a plain String
+  // rather than a native Postgres enum so the exchange list (which also
+  // carries fee/logo metadata) has exactly one source of truth, matching
+  // how BotConfiguration.exchangeName already worked before this model existed.
+  exchangeName String @map("exchange_name")
+
+  // Encrypted at rest via lib/encryption.ts (AES-256-GCM) — the same
+  // mechanism BotConfiguration's exchange credentials already used before
+  // they moved here. A future move to Supabase Vault would replace this
+  // column pair with vault secret references without touching callers,
+  // since lib/encryption.ts is already the single choke point every
+  // encrypt/decrypt call goes through.
+  apiKey    String @map("api_key")
+  apiSecret String @map("api_secret")
+
+  isActive Boolean @default(true) @map("is_active")
+
+  bots BotConfiguration[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, exchangeName])
+  @@index([userId])
+  @@map("exchange_connections")
 }
 
 model BotConfiguration {
@@ -74,12 +126,21 @@ model BotConfiguration {
   userId String  @map("user_id") @db.Uuid
   user   Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  botName      String @map("bot_name")
-  exchangeName String @map("exchange_name")
+  botName String @map("bot_name")
 
-  // Encrypted at rest (see lib/encryption.ts) — never returned to the client in plaintext.
-  exchangeApiKey    String @map("exchange_api_key")
-  exchangeApiSecret String @map("exchange_api_secret")
+  // The linked account whose credentials this bot trades with (see
+  // ExchangeConnection above) — replaces the per-bot exchangeApiKey/
+  // exchangeApiSecret this model used to carry directly. onDelete: Restrict
+  // so removing a connection that's still backing a bot fails loudly
+  // (app/api/platforms/[id]/route.ts checks this before attempting the
+  // delete) rather than orphaning a deployed bot's credentials.
+  exchangeConnectionId String             @map("exchange_connection_id") @db.Uuid
+  exchangeConnection   ExchangeConnection @relation(fields: [exchangeConnectionId], references: [id], onDelete: Restrict)
+  // Denormalized copy of exchangeConnection.exchangeName at creation time —
+  // read in many places (lib/hetzner.ts, fee lookups, display) that don't
+  // otherwise need to join the connection, and immutable for the bot's
+  // lifetime since swapping a bot's exchange isn't supported.
+  exchangeName String @map("exchange_name")
 
   strategy String
   // The actual Freqtrade strategy source (must define `class <strategy>`),
@@ -101,15 +162,24 @@ model BotConfiguration {
   // The user's manual pair selection. Only required (and only read) when
   // autoSelectCoins is false — null/empty whenever auto-select is on.
   pairWhitelist String? @map("pair_whitelist") // comma-separated pairs, e.g. "BTC/USDT,ETH/USDT"
+  // Null until the user clears the Go Live flow (see
+  // app/api/bots/[id]/golive) — every bot starts and stays in paper trading
+  // with no real budget at stake, so there's nothing real to size until
+  // then. lib/hetzner.ts falls back to a fixed virtual paper-trading wallet
+  // (see DEFAULT_PAPER_TOTAL_BUDGET) whenever this is null, so dry-run
+  // performance still means something.
+  //
   // The total amount (in stake_currency) this bot is allowed to put to work
   // across all its open trades. Freqtrade itself is told stake_amount is
   // "unlimited" (see lib/hetzner.ts) — sizing per trade is real Python logic
   // in custom_stake_amount, not a fixed number in config.json.
-  totalBudget        Float @map("total_budget")
+  totalBudget Float? @map("total_budget")
   // Hard ceiling, as a percentage of totalBudget, that custom_stake_amount
   // is allowed to put into a single trade even at maximum FreqAI confidence.
-  // UI: a 10-100 slider defaulting to 20 (see components/ui/BudgetSlider.tsx).
-  maxStakePercentage Float @default(20) @map("max_stake_percentage")
+  // Also null until Go Live — UI: a 10-100 slider (components/ui/BudgetSlider.tsx).
+  maxStakePercentage Float? @map("max_stake_percentage")
+  // Always true at creation (bots start in paper trading, no exceptions) —
+  // flips to false exactly once, via the Go Live flow, never back.
   isPaperTrading Boolean @default(true) @map("is_paper_trading")
 
   deploymentStatus DeploymentStatus @default(LOCAL) @map("deployment_status")
@@ -125,7 +195,7 @@ model BotConfiguration {
   apiServerPassword String? @map("api_server_password")
   apiServerJwtSecret String? @map("api_server_jwt_secret")
 
-  status    BotStatus @default(IDLE) @map("status")
+  status    BotStatus @default(TRAINING_PAPER_TRADE) @map("status")
   lastError String?   @map("last_error")
   // sha256 of the one-time bearer token given to the *deployed* freqtrade
   // instance (via user_data/webhook.json), letting it call back into

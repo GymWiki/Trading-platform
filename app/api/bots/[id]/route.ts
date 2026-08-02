@@ -19,24 +19,22 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 
   const body = await req.json();
-  const { isPaperTrading, trainingMode } = body ?? {};
+  const { trainingMode } = body ?? {};
 
-  if (isPaperTrading === undefined && trainingMode === undefined) {
+  // isPaperTrading is deliberately not editable here — going live is a
+  // one-way, gated action (real balance check + budget commitment) that
+  // only app/api/bots/[id]/golive is allowed to perform. A bare PATCH
+  // flipping it would bypass that gate entirely.
+  if (trainingMode === undefined) {
     return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
   }
-  if (isPaperTrading !== undefined && typeof isPaperTrading !== "boolean") {
-    return NextResponse.json({ error: "isPaperTrading must be a boolean" }, { status: 400 });
-  }
-  if (trainingMode !== undefined && trainingMode !== "LOCAL" && trainingMode !== "CLOUD") {
+  if (trainingMode !== "LOCAL" && trainingMode !== "CLOUD") {
     return NextResponse.json({ error: "trainingMode must be LOCAL or CLOUD" }, { status: 400 });
   }
 
   const updated = await prisma.botConfiguration.update({
     where: { id: bot.id },
-    data: {
-      ...(isPaperTrading !== undefined && { isPaperTrading }),
-      ...(trainingMode !== undefined && { trainingMode }),
-    },
+    data: { trainingMode },
     select: botSelect,
   });
 
