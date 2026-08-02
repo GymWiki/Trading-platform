@@ -23,6 +23,16 @@ model Profile {
   stripeSubscriptionId String? @unique @map("stripe_subscription_id")
   vpsBotQuota          Int     @default(0) @map("vps_bot_quota")
 
+  // One Telegram chat per user (not per bot) — connect once, every bot's
+  // config.json gets our central bot token + this chat_id injected on
+  // deploy (see lib/hetzner.ts). Null until the user links their account.
+  telegramChatId String? @map("telegram_chat_id")
+
+  // Bumped on real user activity (dashboard load — see app/dashboard/page.tsx);
+  // Sleep Mode's daily sweep (app/api/bots/sleep-sweep) compares this
+  // against a 7-day cutoff before stopping a bot's VPS container.
+  lastActiveAt DateTime? @default(now()) @map("last_active_at")
+
   bots                BotConfiguration[]
   exchangeConnections ExchangeConnection[]
 
@@ -74,12 +84,26 @@ enum TrainingStatus {
 //                         which derives the resume status from
 //                         isPaperTrading rather than hardcoding one)
 //   ERROR                 a deploy, training, or pause/resume action failed
+//   PAUSED_EMERGENCY       the user hit the Panic Button (POST
+//                         /api/bots/panic) — every open position was
+//                         market-force-closed and the bot paused. Never
+//                         resumed automatically by anything (see
+//                         lib/bot-status.ts); only POST
+//                         /api/bots/[id]/resume, a deliberate user action,
+//                         clears it.
+//   SLEEPING               auto-paused by the Sleep Mode daily sweep
+//                         (paper-trading bots only, 7+ days of user
+//                         inactivity) — the Hetzner Docker container is
+//                         stopped (not deleted) to save cost. Resumed the
+//                         same way as PAUSED_EMERGENCY.
 enum BotStatus {
   TRAINING_PAPER_TRADE
   TRAINING
   LIVE_TRADING
   UPDATING_MODEL
   ERROR
+  PAUSED_EMERGENCY
+  SLEEPING
 }
 
 // A user's linked exchange account — added credentials once, reused by any
@@ -181,6 +205,14 @@ model BotConfiguration {
   // Always true at creation (bots start in paper trading, no exceptions) —
   // flips to false exactly once, via the Go Live flow, never back.
   isPaperTrading Boolean @default(true) @map("is_paper_trading")
+
+  // Snowball mode: when true, lib/hetzner.ts computes a real
+  // tradable_balance_ratio from the live exchange balance at deploy time
+  // and the strategy's custom_stake_amount sizes off the live wallet
+  // instead of the fixed totalBudget snapshot, so profits compound into
+  // future position sizes rather than sitting idle. Off by default —
+  // matches today's behavior (sizing pinned to totalBudget) exactly.
+  autoCompound Boolean @default(false) @map("auto_compound")
 
   deploymentStatus DeploymentStatus @default(LOCAL) @map("deployment_status")
   aiModelPath      String?          @map("ai_model_path")

@@ -64,3 +64,33 @@ export async function startBot(creds: FreqtradeCredentials): Promise<void> {
 export async function forceExitAll(creds: FreqtradeCredentials): Promise<void> {
   await freqtradeRequest(creds, "POST", "/forceexit", { tradeid: "all" });
 }
+
+// One row of freqtrade's own /trades response — a mix of fields this app
+// actually uses and nothing more. `exit_reason` is the current field name
+// (freqtrade renamed sell_reason -> exit_reason when short support landed);
+// `sell_reason` is read as a fallback in lib/trade-humanizer.ts in case an
+// older freqtrade image is ever pinned.
+export interface FreqtradeTrade {
+  trade_id: number;
+  pair: string;
+  is_open: boolean;
+  open_date: string;
+  close_date: string | null;
+  amount: number;
+  open_rate: number;
+  close_rate: number | null;
+  profit_abs: number | null;
+  profit_ratio: number | null;
+  exit_reason?: string | null;
+  sell_reason?: string | null;
+}
+
+// Freqtrade's own trade log for this deployment — the source for both the
+// Humanized Trade History feed and (later) the P&L chart, which is exactly
+// why profit_abs/close_date are kept in the raw shape rather than trimmed.
+// `limit` is a request-time cap on how many of the most recent trades come
+// back, not a stored setting.
+export async function getTrades(creds: FreqtradeCredentials, limit = 100): Promise<FreqtradeTrade[]> {
+  const data = (await freqtradeRequest(creds, "GET", `/trades?limit=${limit}`)) as { trades: FreqtradeTrade[] };
+  return data.trades;
+}

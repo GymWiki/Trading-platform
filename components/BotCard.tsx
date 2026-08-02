@@ -1,11 +1,28 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Download, Rocket, Upload, Loader2, CheckCircle2, Trash2, Cloud, Laptop, KeyRound, Copy, Check, Zap } from "lucide-react";
+import {
+  Download,
+  Rocket,
+  Upload,
+  Loader2,
+  CheckCircle2,
+  Trash2,
+  Cloud,
+  Laptop,
+  KeyRound,
+  Copy,
+  Check,
+  Zap,
+  AlertOctagon,
+  Moon,
+  PlayCircle,
+} from "lucide-react";
 import type { BotConfigurationDTO, TrainingStatus } from "@/lib/types";
 import { StatusBadge, TrainingStatusBadge } from "@/components/ui/StatusBadge";
 import { TrainingModeToggle } from "@/components/ui/Toggle";
 import { GoLiveModal } from "@/components/GoLiveModal";
+import { TradeHistoryFeed } from "@/components/TradeHistoryFeed";
 import { DEFAULT_PAPER_TOTAL_BUDGET, DEFAULT_PAPER_MAX_STAKE_PERCENTAGE } from "@/lib/paper-trading-defaults";
 import { isTauri } from "@/lib/tauri";
 import { apiFetch, toErrorMessage } from "@/lib/api-client";
@@ -29,9 +46,26 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   const [isGoLiveOpen, setIsGoLiveOpen] = useState(false);
   const [isTogglingTrainingMode, setIsTogglingTrainingMode] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
 
   const jobActive = bot.latestTrainingJob?.status === "QUEUED" || bot.latestTrainingJob?.status === "TRAINING";
   const canGoLive = bot.status === "TRAINING_PAPER_TRADE" && bot.deploymentStatus === "VPS_ACTIVE";
+  const isPaused = bot.status === "PAUSED_EMERGENCY" || bot.status === "SLEEPING";
+
+  // Clears PAUSED_EMERGENCY (Panic Button) or SLEEPING (Sleep Mode) — the
+  // only place either status is ever cleared, see app/api/bots/[id]/resume.
+  async function handleResume() {
+    setError(null);
+    setIsResuming(true);
+    try {
+      const data = await apiFetch<{ bot: BotConfigurationDTO }>(`/api/bots/${bot.id}/resume`, { method: "POST" });
+      onUpdate(data.bot);
+    } catch (err) {
+      setError(toErrorMessage(err, "Hervatten is mislukt"));
+    } finally {
+      setIsResuming(false);
+    }
+  }
 
   async function handleTrainingModeChange(trainingMode: "LOCAL" | "CLOUD") {
     setError(null);
@@ -242,14 +276,40 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
         <StatusBadge status={bot.deploymentStatus} />
       </div>
 
+      {isPaused && (
+        <div className="flex flex-col gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-xs">
+          <div className="flex items-center gap-1.5 font-medium text-amber-300">
+            {bot.status === "PAUSED_EMERGENCY" ? (
+              <AlertOctagon className="h-3.5 w-3.5 shrink-0" />
+            ) : (
+              <Moon className="h-3.5 w-3.5 shrink-0" />
+            )}
+            {bot.status === "PAUSED_EMERGENCY" ? "Noodstop actief" : "In slaapstand — even geen activiteit"}
+          </div>
+          {bot.lastError && <p className="text-amber-200/80">{bot.lastError}</p>}
+          <button
+            type="button"
+            onClick={handleResume}
+            disabled={isResuming}
+            className="flex items-center justify-center gap-1.5 self-start rounded-md bg-amber-500 px-2.5 py-1 text-[11px] font-semibold text-background transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isResuming ? <Loader2 className="h-3 w-3 animate-spin" /> : <PlayCircle className="h-3 w-3" />}
+            Hervat bot
+          </button>
+        </div>
+      )}
+
       <div
         className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs font-medium ${
-          bot.status === "LIVE_TRADING"
-            ? "border-red-500/40 bg-red-500/10 text-red-300"
-            : "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+          bot.isPaperTrading
+            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+            : "border-red-500/40 bg-red-500/10 text-red-300"
         }`}
       >
-        <span>{bot.status === "LIVE_TRADING" ? "Live Trading" : "Paper Trading"}</span>
+        {/* isPaperTrading (not bot.status) drives this label — status now
+            also covers pause states (PAUSED_EMERGENCY/SLEEPING) that don't
+            imply a mode switch, so it can't double as "which mode" here. */}
+        <span>{bot.isPaperTrading ? "Paper Trading" : "Live Trading"}</span>
         {canGoLive && (
           <button
             type="button"
@@ -351,6 +411,8 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
       </div>
 
       {error && <p className="text-xs text-red-400">{error}</p>}
+
+      {bot.deploymentStatus === "VPS_ACTIVE" && <TradeHistoryFeed botId={bot.id} />}
 
       <div className="mt-auto grid grid-cols-2 gap-2 pt-1">
         <button

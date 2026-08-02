@@ -7,9 +7,26 @@
 // "Try before you risk": every bot is born (and stays) in
 // TRAINING_PAPER_TRADE until it clears Go Live — see the enum doc comment
 // in prisma/schema.prisma for the full state machine.
-export type BotStatus = "TRAINING_PAPER_TRADE" | "TRAINING" | "LIVE_TRADING" | "UPDATING_MODEL" | "ERROR";
+export type BotStatus =
+  | "TRAINING_PAPER_TRADE"
+  | "TRAINING"
+  | "LIVE_TRADING"
+  | "UPDATING_MODEL"
+  | "ERROR"
+  | "PAUSED_EMERGENCY"
+  | "SLEEPING";
 
-const TRADING_BLOCKED_STATUSES: ReadonlySet<BotStatus> = new Set(["TRAINING", "UPDATING_MODEL"]);
+// PAUSED_EMERGENCY and SLEEPING are just as blocking as TRAINING/
+// UPDATING_MODEL: nothing (a retrain completing, a redeploy, Go Live)
+// should ever silently resume a bot the user panic-stopped or that Sleep
+// Mode paused for inactivity. Only POST /api/bots/[id]/resume — a
+// deliberate user action — clears either one.
+const TRADING_BLOCKED_STATUSES: ReadonlySet<BotStatus> = new Set([
+  "TRAINING",
+  "UPDATING_MODEL",
+  "PAUSED_EMERGENCY",
+  "SLEEPING",
+]);
 
 export class BotBusyError extends Error {
   constructor(status: BotStatus, action: string) {

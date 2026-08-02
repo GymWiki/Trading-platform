@@ -5,6 +5,7 @@ import { Bot } from "lucide-react";
 import type { BotConfigurationDTO } from "@/lib/types";
 import { BotCard } from "@/components/BotCard";
 import { NewBotDialog } from "@/components/NewBotDialog";
+import { PanicButton } from "@/components/PanicButton";
 import { apiFetch } from "@/lib/api-client";
 
 interface BotFleetGridProps {
@@ -19,6 +20,9 @@ export function BotFleetGrid({ initialBots }: BotFleetGridProps) {
 
   const hasActiveTrainingJob = bots.some(
     (b) => b.latestTrainingJob?.status === "QUEUED" || b.latestTrainingJob?.status === "TRAINING",
+  );
+  const hasStoppableBots = bots.some(
+    (b) => b.deploymentStatus === "VPS_ACTIVE" && b.status !== "PAUSED_EMERGENCY" && b.status !== "SLEEPING",
   );
 
   // Cloud training reports back asynchronously via a webhook the browser
@@ -45,6 +49,18 @@ export function BotFleetGrid({ initialBots }: BotFleetGridProps) {
     };
   }, [hasActiveTrainingJob]);
 
+  // The panic route itself only returns per-bot ok/error flags, not full
+  // DTOs (see app/api/bots/panic) — refetching is simpler than hand-rolling
+  // a partial-update merge for a call that touches every bot at once.
+  async function refetchBots() {
+    try {
+      const data = await apiFetch<{ bots: BotConfigurationDTO[] }>("/api/bots");
+      setBots(data.bots);
+    } catch (err) {
+      console.error("[BotFleetGrid] Refetch after panic failed:", err);
+    }
+  }
+
   function handleUpdate(updated: BotConfigurationDTO) {
     setBots((prev) => prev.map((b) => (b.id === updated.id ? { ...b, ...updated } : b)));
   }
@@ -59,7 +75,8 @@ export function BotFleetGrid({ initialBots }: BotFleetGridProps) {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-end">
+      <div className="flex items-center justify-end gap-3">
+        <PanicButton disabled={!hasStoppableBots} onPanicked={refetchBots} />
         <NewBotDialog onCreated={handleCreated} />
       </div>
 

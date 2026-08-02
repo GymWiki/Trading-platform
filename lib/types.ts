@@ -6,7 +6,14 @@ export type TrainingStatus = "QUEUED" | "TRAINING" | "COMPLETED" | "FAILED";
 // "Try before you risk": every bot is born (and stays) in
 // TRAINING_PAPER_TRADE until it clears the Go Live flow — see the enum
 // doc comment in prisma/schema.prisma for the full state machine.
-export type BotStatus = "TRAINING_PAPER_TRADE" | "TRAINING" | "LIVE_TRADING" | "UPDATING_MODEL" | "ERROR";
+export type BotStatus =
+  | "TRAINING_PAPER_TRADE"
+  | "TRAINING"
+  | "LIVE_TRADING"
+  | "UPDATING_MODEL"
+  | "ERROR"
+  | "PAUSED_EMERGENCY"
+  | "SLEEPING";
 
 export interface TrainingJobDTO {
   id: string;
