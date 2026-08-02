@@ -155,6 +155,27 @@ export async function deleteHetznerServer(serverId: string): Promise<void> {
   }
 }
 
+// Sleep Mode: powers the VM off (immediate, hard poweroff — safe here
+// since only paper-trading bots with no real position at risk are ever
+// eligible, see app/api/bots/sleep-sweep) without deleting it, so Hetzner
+// stops billing for compute while still billing the (much cheaper) disk.
+// Resuming (POST /api/bots/[id]/resume) still goes through the normal
+// delete-and-recreate redeploy path — deleteHetznerServer works fine on an
+// already-powered-off server, so no special-casing is needed there.
+export async function stopHetznerServer(serverId: string): Promise<void> {
+  const token = requireHetznerToken();
+
+  const res = await hetznerFetch(`/servers/${serverId}/actions/poweroff`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok && res.status !== 404) {
+    const errorBody = await res.text();
+    throw new Error(`Hetzner API error (${res.status}): ${errorBody}`);
+  }
+}
+
 // Defense in depth: app/api/bots/route.ts already rejects an unsafe
 // `strategy` value at creation time, but this function shouldn't blindly
 // trust callers for something used as a filesystem path.
@@ -275,6 +296,20 @@ interface CloudInitParams {
   /** Hard ceiling, as a percent of totalBudget, custom_stake_amount enforces on any single trade. */
   maxStakePercentage: number;
   isPaperTrading: boolean;
+  /** Snowball mode — see BotConfiguration.autoCompound in prisma/schema.prisma. Read back out of custom_user_settings by custom_stake_amount (lib/strategy-presets.ts) to size off the live wallet instead of the fixed totalBudget snapshot. */
+  autoCompound: boolean;
+  /**
+   * Caps what fraction of the *whole* exchange wallet freqtrade may ever
+   * touch — only meaningful (and only ever passed) when autoCompound is on
+   * for a live deployment; lib/deploy-bot.ts computes it from
+   * totalBudget/liveBalance at deploy time so a real, growing account
+   * balance still can't be traded beyond what the user actually allocated
+   * to this bot. Omitted for paper trading (the dry-run wallet is already
+   * fully virtual — there's no other real balance to protect) and left
+   * undefined whenever autoCompound is off, in which case freqtrade's own
+   * default (0.99) applies.
+   */
+  tradableBalanceRatio?: number;
   aiModelDownloadUrl?: string;
   apiServerUsername: string;
   apiServerPassword: string;
@@ -283,6 +318,18 @@ interface CloudInitParams {
   statusWebhookUrl: string;
   /** One-time bearer token for the above, hashed and stored as BotConfiguration.statusWebhookTokenHash. */
   statusWebhookToken: string;
+  /**
+   * Our single central Telegram bot's token (process.env.TELEGRAM_BOT_TOKEN)
+   * — the same bot for every user, distinguished only by which chat_id it's
+   * telling to notify. Both this and telegramChatId must be present for
+   * freqtrade's own telegram integration to turn on; either missing (no
+   * server-wide token configured, or this user never linked a chat) just
+   * silently skips the block, exactly like aiModelDownloadUrl being absent
+   * skips the model-download step.
+   */
+  telegramBotToken?: string;
+  /** This bot owner's linked chat — see Profile.telegramChatId in prisma/schema.prisma. */
+  telegramChatId?: string;
 }
 
 // Builds a cloud-init script that installs Docker, writes the strategy
@@ -307,12 +354,16 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
     totalBudget,
     maxStakePercentage,
     isPaperTrading,
+    autoCompound,
+    tradableBalanceRatio,
     aiModelDownloadUrl,
     apiServerUsername,
     apiServerPassword,
     apiServerJwtSecret,
     statusWebhookUrl,
     statusWebhookToken,
+    telegramBotToken,
+    telegramChatId,
   } = params;
 
   assertSafePythonIdentifier(strategy, "strategy");
@@ -340,11 +391,20 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
     trading_mode: "spot",
     // Not read by freqtrade core — this is how the strategy's
     // custom_stake_amount (see lib/strategy-presets.ts) gets the user's
-    // budget and per-trade risk ceiling out of config.json.
+    // budget, per-trade risk ceiling, and snowball preference out of
+    // config.json.
     custom_user_settings: {
       total_budget: totalBudget,
       max_stake_pct: maxStakePercentage,
+      auto_compound: autoCompound,
     },
+    // freqtrade's own real setting (not custom_user_settings) — the safety
+    // margin on top of custom_stake_amount's own ceiling, so a bug or an
+    // unexpectedly large live balance still can't make freqtrade try to
+    // use funds outside what this bot was ever allocated. Absent whenever
+    // it wasn't computed (paper trading, or autoCompound off) — freqtrade
+    // defaults to 0.99 on its own.
+    ...(tradableBalanceRatio !== undefined && { tradable_balance_ratio: tradableBalanceRatio }),
     exchange: {
       name: exchangeName,
       key: exchangeApiKey,
@@ -387,6 +447,19 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
       username: apiServerUsername,
       password: apiServerPassword,
     },
+    // freqtrade's own built-in Telegram integration — no notification-
+    // sending code of our own needed, it messages the chat directly from
+    // inside the container on every entry/exit. Omitted entirely (rather
+    // than enabled: false) whenever either half is missing, so an unset
+    // server-wide token or an unlinked user never even renders the block.
+    ...(telegramBotToken &&
+      telegramChatId && {
+        telegram: {
+          enabled: true,
+          token: telegramBotToken,
+          chat_id: telegramChatId,
+        },
+      }),
   };
 
   const configJson = JSON.stringify(freqtradeConfig, null, 2);
@@ -456,6 +529,8 @@ interface TrainingCloudInitParams {
   /** Same budget/risk settings the live deploy gets — backtesting (which is how FreqAI training runs) still exercises custom_stake_amount, so it needs a real custom_user_settings block too. */
   totalBudget: number;
   maxStakePercentage: number;
+  /** Same snowball preference as the live deploy — kept consistent so a backtest previews the same sizing logic a real deploy would use. No tradableBalanceRatio here: this VM never receives real exchange credentials (see module doc below), so there's no live balance to protect. */
+  autoCompound: boolean;
   /**
    * GET endpoint (/api/train/cloud/upload-url) the VM calls right before
    * uploading to mint a fresh signed Storage URL — minted just-in-time
@@ -498,6 +573,7 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     pairWhitelist,
     totalBudget,
     maxStakePercentage,
+    autoCompound,
     uploadUrlEndpoint,
     callbackUrl,
     callbackToken,
@@ -548,6 +624,7 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     custom_user_settings: {
       total_budget: totalBudget,
       max_stake_pct: maxStakePercentage,
+      auto_compound: autoCompound,
     },
     trading_mode: "spot",
     exchange: {

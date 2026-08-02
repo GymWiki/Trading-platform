@@ -91,6 +91,7 @@ export async function startCloudTrainingJob({ bot, cancelOpenOrders = false }: S
       pairWhitelist: bot.pairWhitelist ? bot.pairWhitelist.split(",").map((p) => p.trim()).filter(Boolean) : [],
       totalBudget: bot.totalBudget ?? DEFAULT_PAPER_TOTAL_BUDGET,
       maxStakePercentage: bot.maxStakePercentage ?? DEFAULT_PAPER_MAX_STAKE_PERCENTAGE,
+      autoCompound: bot.autoCompound,
       uploadUrlEndpoint: `${appUrl}/api/train/cloud/upload-url`,
       callbackUrl: `${appUrl}/api/train/cloud/callback`,
       callbackToken,

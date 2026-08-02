@@ -19,6 +19,7 @@ export const botSelect = {
   totalBudget: true,
   maxStakePercentage: true,
   isPaperTrading: true,
+  autoCompound: true,
   deploymentStatus: true,
   aiModelPath: true,
   hetznerServerIp: true,

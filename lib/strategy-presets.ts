@@ -200,8 +200,15 @@ class FreqaiScalperStrategy(IStrategy):
         stake_amount itself is "unlimited" in config.json; this function is
         the real sizing logic."""
         settings = self.config.get("custom_user_settings", {})
-        total_budget = float(settings.get("total_budget") or self.wallets.get_total_stake_amount() or proposed_stake)
         max_stake_pct = float(settings.get("max_stake_pct", 20)) / 100
+        # Auto-Compounding: size off the *live* wallet instead of the fixed
+        # total_budget snapshot, so profits compound into future position
+        # sizes rather than sitting idle (see BotConfiguration.autoCompound,
+        # lib/hetzner.ts tradable_balance_ratio, and lib/deploy-bot.ts).
+        if bool(settings.get("auto_compound", False)):
+            total_budget = float(self.wallets.get_total_stake_amount() or proposed_stake)
+        else:
+            total_budget = float(settings.get("total_budget") or self.wallets.get_total_stake_amount() or proposed_stake)
 
         hard_cap = total_budget * max_stake_pct
         floor = hard_cap * 0.25  # never risk less than a quarter of the user's own ceiling on a real signal
@@ -367,8 +374,15 @@ class FreqaiDcaStrategy(IStrategy):
         see lib/hetzner.ts). stake_amount itself is "unlimited" in
         config.json; this function is the real sizing logic."""
         settings = self.config.get("custom_user_settings", {})
-        total_budget = float(settings.get("total_budget") or self.wallets.get_total_stake_amount() or proposed_stake)
         max_stake_pct = float(settings.get("max_stake_pct", 20)) / 100
+        # Auto-Compounding: size off the *live* wallet instead of the fixed
+        # total_budget snapshot, so profits compound into future position
+        # sizes rather than sitting idle (see BotConfiguration.autoCompound,
+        # lib/hetzner.ts tradable_balance_ratio, and lib/deploy-bot.ts).
+        if bool(settings.get("auto_compound", False)):
+            total_budget = float(self.wallets.get_total_stake_amount() or proposed_stake)
+        else:
+            total_budget = float(settings.get("total_budget") or self.wallets.get_total_stake_amount() or proposed_stake)
 
         hard_cap = total_budget * max_stake_pct
         floor = hard_cap * 0.25  # never risk less than a quarter of the user's own ceiling on a real signal
@@ -517,8 +531,15 @@ class FreqaiTrendCatcherStrategy(IStrategy):
         stake_amount itself is "unlimited" in config.json; this function is
         the real sizing logic."""
         settings = self.config.get("custom_user_settings", {})
-        total_budget = float(settings.get("total_budget") or self.wallets.get_total_stake_amount() or proposed_stake)
         max_stake_pct = float(settings.get("max_stake_pct", 20)) / 100
+        # Auto-Compounding: size off the *live* wallet instead of the fixed
+        # total_budget snapshot, so profits compound into future position
+        # sizes rather than sitting idle (see BotConfiguration.autoCompound,
+        # lib/hetzner.ts tradable_balance_ratio, and lib/deploy-bot.ts).
+        if bool(settings.get("auto_compound", False)):
+            total_budget = float(self.wallets.get_total_stake_amount() or proposed_stake)
+        else:
+            total_budget = float(settings.get("total_budget") or self.wallets.get_total_stake_amount() or proposed_stake)
 
         hard_cap = total_budget * max_stake_pct
         floor = hard_cap * 0.25  # never risk less than a quarter of the user's own ceiling on a real signal

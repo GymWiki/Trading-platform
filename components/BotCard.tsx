@@ -23,6 +23,7 @@ import { StatusBadge, TrainingStatusBadge } from "@/components/ui/StatusBadge";
 import { TrainingModeToggle } from "@/components/ui/Toggle";
 import { GoLiveModal } from "@/components/GoLiveModal";
 import { TradeHistoryFeed } from "@/components/TradeHistoryFeed";
+import { Switch } from "@/components/ui/Switch";
 import { DEFAULT_PAPER_TOTAL_BUDGET, DEFAULT_PAPER_MAX_STAKE_PERCENTAGE } from "@/lib/paper-trading-defaults";
 import { isTauri } from "@/lib/tauri";
 import { apiFetch, toErrorMessage } from "@/lib/api-client";
@@ -45,6 +46,7 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   const [error, setError] = useState<string | null>(null);
   const [isGoLiveOpen, setIsGoLiveOpen] = useState(false);
   const [isTogglingTrainingMode, setIsTogglingTrainingMode] = useState(false);
+  const [isTogglingAutoCompound, setIsTogglingAutoCompound] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
 
@@ -81,6 +83,26 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
       setError(toErrorMessage(err, "Failed to update training mode"));
     } finally {
       setIsTogglingTrainingMode(false);
+    }
+  }
+
+  // Only flips the DB flag — the next (re)deploy is what actually reads it
+  // into config.json (see lib/deploy-bot.ts, lib/hetzner.ts), same as a
+  // totalBudget change via Go Live.
+  async function handleAutoCompoundChange(autoCompound: boolean) {
+    setError(null);
+    setIsTogglingAutoCompound(true);
+    try {
+      const data = await apiFetch<{ bot: BotConfigurationDTO }>(`/api/bots/${bot.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ autoCompound }),
+      });
+      onUpdate(data.bot);
+    } catch (err) {
+      setError(toErrorMessage(err, "Kon auto-compounding niet wijzigen"));
+    } finally {
+      setIsTogglingAutoCompound(false);
     }
   }
 
@@ -274,6 +296,21 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
           )}
         </div>
         <StatusBadge status={bot.deploymentStatus} />
+      </div>
+
+      <div className="flex items-center justify-between gap-3 rounded-lg bg-background px-3 py-2">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-slate-200">Auto-Compounding</p>
+          <p className="text-[11px] text-slate-500">
+            Herinvesteer winst automatisch in grotere posities — actief vanaf de volgende (re)deploy.
+          </p>
+        </div>
+        <Switch
+          checked={bot.autoCompound}
+          onChange={handleAutoCompoundChange}
+          disabled={isTogglingAutoCompound}
+          aria-label="Auto-Compounding"
+        />
       </div>
 
       {isPaused && (

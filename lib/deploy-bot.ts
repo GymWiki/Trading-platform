@@ -8,6 +8,13 @@ import { botSelect, toBotDTO } from "@/lib/bot-select";
 import { generateCallbackToken, hashCallbackToken } from "@/lib/training-token";
 import type { FreqAIProfileConfig } from "@/lib/strategy-presets";
 import { DEFAULT_PAPER_TOTAL_BUDGET, DEFAULT_PAPER_MAX_STAKE_PERCENTAGE } from "@/lib/paper-trading-defaults";
+import { fetchFreeBalance } from "@/lib/ccxt-client";
+
+// Auto-Compounding's tradable_balance_ratio must never exceed 1 (freqtrade
+// itself rejects that) and is floored well above 0 so a stale/incorrect
+// balance reading can't leave freqtrade with an unusably tiny allowance.
+const MIN_TRADABLE_BALANCE_RATIO = 0.01;
+const MAX_TRADABLE_BALANCE_RATIO = 1;
 
 type BotRow = Prisma.BotConfigurationGetPayload<object>;
 
@@ -48,6 +55,14 @@ export async function deployBotToVps({ bot, supabase }: DeployBotParams) {
     throw new Error("The exchange platform linked to this bot no longer exists — reconnect it under /platforms.");
   }
 
+  // Best-effort, never blocking: a bot must still deploy fine whether or
+  // not the operator configured a central Telegram bot, or this user ever
+  // linked a chat (see app/settings, /api/account/telegram).
+  const profile = await prisma.profile.findUnique({
+    where: { id: bot.userId },
+    select: { telegramChatId: true },
+  });
+
   // The "models" bucket is private, so the Hetzner VPS (which has no
   // Supabase session) needs a short-lived signed URL to fetch the file
   // during cloud-init — long enough for boot + Docker pull + download.
@@ -65,6 +80,30 @@ export async function deployBotToVps({ bot, supabase }: DeployBotParams) {
   const apiServerJwtSecret = crypto.randomBytes(32).toString("hex");
   const statusWebhookToken = generateCallbackToken();
 
+  // Snowball mode, live only: compute how much of the *whole* exchange
+  // wallet this specific bot is allowed to touch, so a real, growing
+  // account balance can still never be traded beyond what the user
+  // actually allocated here (see lib/hetzner.ts tradableBalanceRatio doc).
+  // Paper trading skips this entirely — dry_run_wallet is already fully
+  // virtual, so there's no other real balance to protect. Best-effort: a
+  // failed balance read must never block a deploy, it just falls back to
+  // freqtrade's own tradable_balance_ratio default.
+  let tradableBalanceRatio: number | undefined;
+  if (bot.autoCompound && !bot.isPaperTrading) {
+    const budget = bot.totalBudget ?? DEFAULT_PAPER_TOTAL_BUDGET;
+    try {
+      const balance = await fetchFreeBalance(bot.exchangeName, decrypt(connection.apiKey), decrypt(connection.apiSecret));
+      if (balance.amount > 0) {
+        tradableBalanceRatio = Math.min(
+          MAX_TRADABLE_BALANCE_RATIO,
+          Math.max(MIN_TRADABLE_BALANCE_RATIO, budget / balance.amount),
+        );
+      }
+    } catch (err) {
+      console.error(`[deploy-bot] Could not fetch live balance for auto-compound ratio on bot ${bot.id}:`, err);
+    }
+  }
+
   const cloudInit = buildFreqtradeCloudInit({
     botName: bot.botName.toLowerCase().replace(/[^a-z0-9-]/g, "-"),
     exchangeName: bot.exchangeName,
@@ -78,12 +117,16 @@ export async function deployBotToVps({ bot, supabase }: DeployBotParams) {
     totalBudget: bot.totalBudget ?? DEFAULT_PAPER_TOTAL_BUDGET,
     maxStakePercentage: bot.maxStakePercentage ?? DEFAULT_PAPER_MAX_STAKE_PERCENTAGE,
     isPaperTrading: bot.isPaperTrading,
+    autoCompound: bot.autoCompound,
+    tradableBalanceRatio,
     aiModelDownloadUrl: signedUrlData.signedUrl,
     apiServerUsername,
     apiServerPassword,
     apiServerJwtSecret,
     statusWebhookUrl: `${appUrl}/api/bots/${bot.id}/status`,
     statusWebhookToken,
+    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
+    telegramChatId: profile?.telegramChatId ?? undefined,
   });
 
   // Redeploy (retrain completed for an already-live bot): tear down the old

@@ -43,6 +43,7 @@ export interface BotConfigurationDTO {
   totalBudget: number | null;
   maxStakePercentage: number | null;
   isPaperTrading: boolean;
+  autoCompound: boolean;
   deploymentStatus: DeploymentStatus;
   aiModelPath: string | null;
   hetznerServerIp: string | null;

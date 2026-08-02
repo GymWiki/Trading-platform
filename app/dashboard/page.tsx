@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { Navbar } from "@/components/Navbar";
 import { BotFleetGrid } from "@/components/BotFleetGrid";
+import { PnlChart } from "@/components/PnlChart";
 import { botSelect, toBotDTO } from "@/lib/bot-select";
 
 export default async function DashboardPage() {
@@ -19,10 +20,14 @@ export default async function DashboardPage() {
     // A Supabase trigger creates this row on signup (see the profiles
     // migration), but upsert instead of findUniqueOrThrow so a lagging or
     // failed trigger self-heals into a default profile instead of crashing
-    // the whole dashboard with a P2025.
+    // the whole dashboard with a P2025. The update clause doubles as Sleep
+    // Mode's activity signal — a dashboard load is exactly "the user is
+    // here" (see app/api/bots/sleep-sweep, which reads this same column) —
+    // piggybacking on the query this page already needs instead of adding
+    // a second write per page load.
     prisma.profile.upsert({
       where: { id: user.id },
-      update: {},
+      update: { lastActiveAt: new Date() },
       create: { id: user.id },
       select: { vpsBotQuota: true },
     }),
@@ -47,6 +52,10 @@ export default async function DashboardPage() {
               {activeVpsBots} / {profile.vpsBotQuota} cloud slots in use
             </p>
           </div>
+        </div>
+
+        <div className="mb-6">
+          <PnlChart />
         </div>
 
         <BotFleetGrid initialBots={botDTOs} vpsBotQuota={profile.vpsBotQuota} />

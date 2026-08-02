@@ -22,6 +22,9 @@ export async function Navbar() {
               <Link href="/platforms" className="text-sm font-medium text-slate-300 transition hover:text-primary">
                 Platformen
               </Link>
+              <Link href="/settings" className="text-sm font-medium text-slate-300 transition hover:text-primary">
+                Instellingen
+              </Link>
               <Link
                 href="/dashboard"
                 className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-background transition hover:bg-primary-hover"
