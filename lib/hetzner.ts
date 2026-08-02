@@ -10,6 +10,28 @@ function requireHetznerToken(): string {
   return token;
 }
 
+// Every call in this file goes through here so a slow/hanging Hetzner API
+// can't hang the Vercel function that's awaiting it (provisioning/deleting
+// a VPS, both of which run inline in an API route — see lib/deploy-bot.ts,
+// app/api/bots/[id]/route.ts), and so a DNS/network failure surfaces as a
+// clear message instead of an unhandled TypeError.
+const HETZNER_TIMEOUT_MS = 15_000;
+
+async function hetznerFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), HETZNER_TIMEOUT_MS);
+  try {
+    return await fetch(`${HETZNER_API_BASE}${path}`, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`Hetzner API request timed out after ${HETZNER_TIMEOUT_MS / 1000}s (${path})`);
+    }
+    throw new Error(`Could not reach Hetzner API: ${err instanceof Error ? err.message : "Unknown error"}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 type FirewallProfile = "live-trading" | "training";
 
 // Creates (or reuses) a Hetzner Cloud Firewall for the given profile and
@@ -21,7 +43,7 @@ async function ensureFirewall(profile: FirewallProfile): Promise<number> {
   const token = requireHetznerToken();
   const name = `freqtrade-command-center-${profile}`;
 
-  const listRes = await fetch(`${HETZNER_API_BASE}/firewalls?name=${encodeURIComponent(name)}`, {
+  const listRes = await hetznerFetch(`/firewalls?name=${encodeURIComponent(name)}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!listRes.ok) {
@@ -54,7 +76,7 @@ async function ensureFirewall(profile: FirewallProfile): Promise<number> {
         ]
       : [];
 
-  const createRes = await fetch(`${HETZNER_API_BASE}/firewalls`, {
+  const createRes = await hetznerFetch(`/firewalls`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ name, rules, labels: { app: "freqtrade-command-center" } }),
@@ -93,7 +115,7 @@ export async function createHetznerServer({
   const token = requireHetznerToken();
   const firewallId = firewallProfile ? await ensureFirewall(firewallProfile) : undefined;
 
-  const res = await fetch(`${HETZNER_API_BASE}/servers`, {
+  const res = await hetznerFetch(`/servers`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -122,7 +144,7 @@ export async function createHetznerServer({
 export async function deleteHetznerServer(serverId: string): Promise<void> {
   const token = requireHetznerToken();
 
-  const res = await fetch(`${HETZNER_API_BASE}/servers/${serverId}`, {
+  const res = await hetznerFetch(`/servers/${serverId}`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${token}` },
   });

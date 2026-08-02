@@ -29,18 +29,23 @@ function LoginForm() {
     setError(null);
     setIsSubmitting(true);
 
-    const supabase = createClient();
-    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    try {
+      const supabase = createClient();
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
 
-    setIsSubmitting(false);
+      if (signInError) {
+        setError("Onjuiste e-mail of wachtwoord");
+        return;
+      }
 
-    if (signInError) {
-      setError("Onjuiste e-mail of wachtwoord");
-      return;
+      router.push(callbackUrl);
+      router.refresh();
+    } catch (err) {
+      console.error("[LoginForm] Sign in failed:", err);
+      setError("Inloggen is mislukt. Probeer het opnieuw.");
+    } finally {
+      setIsSubmitting(false);
     }
-
-    router.push(callbackUrl);
-    router.refresh();
   }
 
   return (

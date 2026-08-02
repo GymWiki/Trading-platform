@@ -6,6 +6,7 @@ import { ExchangeCombobox } from "@/components/ui/ExchangeCombobox";
 import { InfoTooltip } from "@/components/ui/Tooltip";
 import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import type { PlatformWithBalance } from "@/lib/platforms";
+import { apiFetch, toErrorMessage } from "@/lib/api-client";
 
 interface AddPlatformDialogProps {
   connectedExchangeIds: string[];
@@ -39,18 +40,16 @@ export function AddPlatformDialog({ connectedExchangeIds, onAdded }: AddPlatform
 
     setIsSubmitting(true);
     try {
-      const res = await fetch("/api/platforms", {
+      const data = await apiFetch<{ platform: PlatformWithBalance }>("/api/platforms", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to add platform");
       onAdded(data.platform);
       setForm(EMPTY_FORM);
       setOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add platform");
+      setError(toErrorMessage(err, "Failed to add platform"));
     } finally {
       setIsSubmitting(false);
     }

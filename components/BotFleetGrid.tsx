@@ -5,6 +5,7 @@ import { Bot } from "lucide-react";
 import type { BotConfigurationDTO } from "@/lib/types";
 import { BotCard } from "@/components/BotCard";
 import { NewBotDialog } from "@/components/NewBotDialog";
+import { apiFetch } from "@/lib/api-client";
 
 interface BotFleetGridProps {
   initialBots: BotConfigurationDTO[];
@@ -25,14 +26,23 @@ export function BotFleetGrid({ initialBots }: BotFleetGridProps) {
   useEffect(() => {
     if (!hasActiveTrainingJob) return;
 
+    let cancelled = false;
     const interval = setInterval(async () => {
-      const res = await fetch("/api/bots");
-      if (!res.ok) return;
-      const data = await res.json();
-      setBots(data.bots);
+      try {
+        const data = await apiFetch<{ bots: BotConfigurationDTO[] }>("/api/bots");
+        if (!cancelled) setBots(data.bots);
+      } catch (err) {
+        // A single missed poll isn't worth surfacing to the user — the
+        // next tick retries automatically, and BotCard's own actions
+        // already report errors for anything the user directly triggered.
+        console.error("[BotFleetGrid] Poll for /api/bots failed:", err);
+      }
     }, POLL_INTERVAL_MS);
 
-    return () => clearInterval(interval);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [hasActiveTrainingJob]);
 
   function handleUpdate(updated: BotConfigurationDTO) {

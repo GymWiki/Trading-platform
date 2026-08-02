@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { decrypt } from "@/lib/encryption";
+import { withErrorHandling } from "@/lib/api-handler";
 
 // Lets the owner re-view their deployed bot's freqtrade REST API
 // credentials after the one-time reveal in the POST /api/deploy response
 // has scrolled away. Same encrypt-at-rest pattern as the exchange keys.
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export const GET = withErrorHandling(async (_req: NextRequest, { params }: { params: { id: string } }) => {
   const supabase = await createClient();
   const {
     data: { user },
@@ -27,4 +28,4 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     username: bot.apiServerUsername,
     password: decrypt(bot.apiServerPassword),
   });
-}
+});

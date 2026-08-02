@@ -2,12 +2,13 @@
 
 import { useRef, useState } from "react";
 import { Download, Rocket, Upload, Loader2, CheckCircle2, Trash2, Cloud, Laptop, KeyRound, Copy, Check, Zap } from "lucide-react";
-import type { BotConfigurationDTO } from "@/lib/types";
+import type { BotConfigurationDTO, TrainingStatus } from "@/lib/types";
 import { StatusBadge, TrainingStatusBadge } from "@/components/ui/StatusBadge";
 import { TrainingModeToggle } from "@/components/ui/Toggle";
 import { GoLiveModal } from "@/components/GoLiveModal";
 import { DEFAULT_PAPER_TOTAL_BUDGET, DEFAULT_PAPER_MAX_STAKE_PERCENTAGE } from "@/lib/paper-trading-defaults";
 import { isTauri } from "@/lib/tauri";
+import { apiFetch, toErrorMessage } from "@/lib/api-client";
 
 interface BotCardProps {
   bot: BotConfigurationDTO;
@@ -26,23 +27,26 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   const [copiedField, setCopiedField] = useState<"username" | "password" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isGoLiveOpen, setIsGoLiveOpen] = useState(false);
+  const [isTogglingTrainingMode, setIsTogglingTrainingMode] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const jobActive = bot.latestTrainingJob?.status === "QUEUED" || bot.latestTrainingJob?.status === "TRAINING";
   const canGoLive = bot.status === "TRAINING_PAPER_TRADE" && bot.deploymentStatus === "VPS_ACTIVE";
 
   async function handleTrainingModeChange(trainingMode: "LOCAL" | "CLOUD") {
     setError(null);
+    setIsTogglingTrainingMode(true);
     try {
-      const res = await fetch(`/api/bots/${bot.id}`, {
+      const data = await apiFetch<{ bot: BotConfigurationDTO }>(`/api/bots/${bot.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ trainingMode }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to update training mode");
       onUpdate(data.bot);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update training mode");
+      setError(toErrorMessage(err, "Failed to update training mode"));
+    } finally {
+      setIsTogglingTrainingMode(false);
     }
   }
 
@@ -53,12 +57,10 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
       const formData = new FormData();
       formData.append("botId", bot.id);
       formData.append("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body: formData });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Upload failed");
+      const data = await apiFetch<{ aiModelPath: string }>("/api/upload", { method: "POST", body: formData });
       onUpdate({ ...bot, aiModelPath: data.aiModelPath });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed");
+      setError(toErrorMessage(err, "Upload failed"));
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -92,7 +94,7 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
       const file = new File([new Uint8Array(bytes)], filename, { type: "application/octet-stream" });
       await handleFileSelected(file);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Local training failed");
+      setError(toErrorMessage(err, "Local training failed"));
     } finally {
       setIsTrainingLocally(false);
     }
@@ -105,20 +107,27 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
     setError(null);
     setIsStartingCloudTraining(true);
     try {
-      const res = await fetch("/api/train/cloud", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ botId: bot.id }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to start cloud training");
+      const data = await apiFetch<{ job: { id: string; status: TrainingStatus; createdAt: string } }>(
+        "/api/train/cloud",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ botId: bot.id }),
+        },
+      );
       onUpdate({
         ...bot,
         trainingMode: "CLOUD",
-        latestTrainingJob: { id: data.job.id, status: data.job.status, mode: "CLOUD", errorMessage: null, createdAt: data.job.createdAt },
+        latestTrainingJob: {
+          id: data.job.id,
+          status: data.job.status,
+          mode: "CLOUD",
+          errorMessage: null,
+          createdAt: data.job.createdAt,
+        },
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to start cloud training");
+      setError(toErrorMessage(err, "Failed to start cloud training"));
     } finally {
       setIsStartingCloudTraining(false);
     }
@@ -156,22 +165,25 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
     setError(null);
     setIsDeploying(true);
     try {
-      const res = await fetch("/api/deploy", {
+      const data = await apiFetch<{
+        requiresCheckout: boolean;
+        checkoutUrl?: string;
+        bot?: BotConfigurationDTO;
+        apiCredentials?: { username: string; password: string };
+      }>("/api/deploy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ botId: bot.id }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Deploy failed");
 
       if (data.requiresCheckout) {
-        window.location.href = data.checkoutUrl;
+        if (data.checkoutUrl) window.location.href = data.checkoutUrl;
         return;
       }
-      onUpdate(data.bot);
+      if (data.bot) onUpdate(data.bot);
       if (data.apiCredentials) setApiCredentials(data.apiCredentials);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Deploy failed");
+      setError(toErrorMessage(err, "Deploy failed"));
     } finally {
       setIsDeploying(false);
     }
@@ -181,12 +193,10 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
     setError(null);
     setIsRevealingCredentials(true);
     try {
-      const res = await fetch(`/api/bots/${bot.id}/credentials`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Could not load credentials");
+      const data = await apiFetch<{ username: string; password: string }>(`/api/bots/${bot.id}/credentials`);
       setApiCredentials(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load credentials");
+      setError(toErrorMessage(err, "Could not load credentials"));
     } finally {
       setIsRevealingCredentials(false);
     }
@@ -200,8 +210,15 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
 
   async function handleDelete() {
     if (!confirm(`Remove ${bot.botName}? This cannot be undone.`)) return;
-    const res = await fetch(`/api/bots/${bot.id}`, { method: "DELETE" });
-    if (res.ok) onDelete(bot.id);
+    setError(null);
+    setIsDeleting(true);
+    try {
+      await apiFetch(`/api/bots/${bot.id}`, { method: "DELETE" });
+      onDelete(bot.id);
+    } catch (err) {
+      setError(toErrorMessage(err, "Failed to remove bot"));
+      setIsDeleting(false);
+    }
   }
 
   return (
@@ -260,7 +277,7 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
         <TrainingModeToggle
           mode={bot.trainingMode}
           onChange={handleTrainingModeChange}
-          disabled={jobActive}
+          disabled={jobActive || isTogglingTrainingMode}
         />
 
         {bot.latestTrainingJob && (
@@ -390,9 +407,10 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
       <button
         type="button"
         onClick={handleDelete}
-        className="flex items-center justify-center gap-1.5 text-[11px] text-slate-500 transition hover:text-red-400"
+        disabled={isDeleting}
+        className="flex items-center justify-center gap-1.5 text-[11px] text-slate-500 transition hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        <Trash2 className="h-3 w-3" />
+        {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
         Remove bot
       </button>
     </div>

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient as createServerComponentClient } from "@supabase/supabase-js";
 import { prisma } from "@/lib/prisma";
 import { extractBearerToken, hashCallbackToken } from "@/lib/training-token";
+import { withErrorHandling } from "@/lib/api-handler";
 
 const MODELS_BUCKET = "models";
 
@@ -16,7 +17,7 @@ const MODELS_BUCKET = "models";
 // computed entirely from our own trusted job record (job.userId/job.botId),
 // never from caller input — the bearer token only ever unlocks the one path
 // that job was created for.
-export async function GET(req: NextRequest) {
+export const GET = withErrorHandling(async (req: NextRequest) => {
   const token = extractBearerToken(req.headers.get("authorization"));
   if (!token) {
     return NextResponse.json({ error: "Missing bearer token" }, { status: 401 });
@@ -50,4 +51,4 @@ export async function GET(req: NextRequest) {
   await prisma.trainingJob.update({ where: { id: job.id }, data: { aiModelPath: objectPath } });
 
   return NextResponse.json({ uploadUrl: data.signedUrl });
-}
+});

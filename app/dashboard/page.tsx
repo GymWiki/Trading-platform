@@ -16,8 +16,14 @@ export default async function DashboardPage() {
   }
 
   const [profile, bots] = await Promise.all([
-    prisma.profile.findUniqueOrThrow({
+    // A Supabase trigger creates this row on signup (see the profiles
+    // migration), but upsert instead of findUniqueOrThrow so a lagging or
+    // failed trigger self-heals into a default profile instead of crashing
+    // the whole dashboard with a P2025.
+    prisma.profile.upsert({
       where: { id: user.id },
+      update: {},
+      create: { id: user.id },
       select: { vpsBotQuota: true },
     }),
     prisma.botConfiguration.findMany({

@@ -1,11 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { decrypt } from "@/lib/encryption";
 import { extractBearerToken, hashCallbackToken, timingSafeEqualHex } from "@/lib/training-token";
 import { startBot, stopBot } from "@/lib/freqtrade-client";
 import { startCloudTrainingJob, TrainingBusyError } from "@/lib/train-cloud";
+import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
 const MAX_MESSAGE_LENGTH = 2000;
+
+const statusBodySchema = z.object({
+  event: z.enum(["training_complete", "retrain_needed", "error"]),
+  // Not length-bounded for the same reason as train/cloud/callback: this
+  // is a fire-and-forget report from the bot itself, and rejecting it
+  // outright would leave the bot stuck mid-transition with no way to retry.
+  message: z.string().nullish(),
+  cancelOpenOrders: z.boolean().optional(),
+});
 
 // Called by a *deployed* bot's own strategy/FreqAI model code (via
 // user_data/webhook.json, written at deploy time — see lib/hetzner.ts) to
@@ -16,7 +27,7 @@ const MAX_MESSAGE_LENGTH = 2000;
 // This is the live counterpart to POST /api/train/cloud/callback: that
 // route hears from our own ephemeral training VMs; this one hears from the
 // long-running bot itself.
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export const POST = withErrorHandling(async (req: NextRequest, { params }: { params: { id: string } }) => {
   const token = extractBearerToken(req.headers.get("authorization"));
   if (!token) {
     return NextResponse.json({ error: "Missing bearer token" }, { status: 401 });
@@ -30,17 +41,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: "Invalid token" }, { status: 401 });
   }
 
-  const body = await req.json().catch(() => null);
-  const event = body?.event;
-  const message =
-    typeof body?.message === "string" ? body.message.slice(0, MAX_MESSAGE_LENGTH) : null;
-
-  if (event !== "training_complete" && event !== "retrain_needed" && event !== "error") {
-    return NextResponse.json(
-      { error: "event must be training_complete, retrain_needed, or error" },
-      { status: 400 },
-    );
-  }
+  const parsed = await parseJsonBody(req, statusBodySchema);
+  if ("error" in parsed) return parsed.error;
+  const { event, cancelOpenOrders = false } = parsed.data;
+  const message = parsed.data.message?.slice(0, MAX_MESSAGE_LENGTH) ?? null;
 
   const creds =
     bot.hetznerServerIp && bot.apiServerUsername && bot.apiServerPassword
@@ -64,6 +68,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       try {
         await startBot(creds);
       } catch (err) {
+        console.error(`[bots/status] Failed to resume trading for bot ${bot.id}:`, err);
         const errMessage = err instanceof Error ? err.message : "Failed to resume trading";
         await prisma.botConfiguration.update({
           where: { id: bot.id },
@@ -96,7 +101,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           { status: 409 },
         );
       }
-      const cancelOpenOrders = body?.cancelOpenOrders === true;
       try {
         const job = await startCloudTrainingJob({ bot, cancelOpenOrders });
         return NextResponse.json({ ok: true, status: "UPDATING_MODEL", job }, { status: 202 });
@@ -104,6 +108,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         if (err instanceof TrainingBusyError) {
           return NextResponse.json({ error: err.message }, { status: 409 });
         }
+        console.error(`[bots/status] Failed to start retrain for bot ${bot.id}:`, err);
         const errMessage = err instanceof Error ? err.message : "Failed to start retrain";
         return NextResponse.json({ error: errMessage }, { status: 502 });
       }
@@ -116,8 +121,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       if (creds) {
         try {
           await stopBot(creds);
-        } catch {
+        } catch (err) {
           // best effort — ERROR status still applies below regardless
+          console.error(`[bots/status] Best-effort stopBot failed for bot ${bot.id}:`, err);
         }
       }
       await prisma.botConfiguration.update({
@@ -127,4 +133,4 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ ok: true, status: "ERROR" });
     }
   }
-}
+});

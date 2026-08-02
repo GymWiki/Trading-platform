@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { stripe } from "@/lib/stripe";
 import { assertCanTrade, BotBusyError } from "@/lib/bot-status";
 import { deployBotToVps } from "@/lib/deploy-bot";
+import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
-export async function POST(req: NextRequest) {
+const deployBodySchema = z.object({
+  botId: z.string().min(1, "botId is required"),
+});
+
+export const POST = withErrorHandling(async (req: NextRequest) => {
   const supabase = await createClient();
   const {
     data: { user: authUser },
@@ -14,10 +20,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { botId } = await req.json();
-  if (typeof botId !== "string" || !botId) {
-    return NextResponse.json({ error: "botId is required" }, { status: 400 });
-  }
+  const parsed = await parseJsonBody(req, deployBodySchema);
+  if ("error" in parsed) return parsed.error;
+  const { botId } = parsed.data;
 
   const bot = await prisma.botConfiguration.findUnique({ where: { id: botId } });
   if (!bot || bot.userId !== authUser.id) {
@@ -37,7 +42,10 @@ export async function POST(req: NextRequest) {
     throw err;
   }
 
-  const profile = await prisma.profile.findUniqueOrThrow({ where: { id: authUser.id } });
+  const profile = await prisma.profile.findUnique({ where: { id: authUser.id } });
+  if (!profile) {
+    return NextResponse.json({ error: "Profile not found for this account" }, { status: 404 });
+  }
   const activeVpsBots = await prisma.botConfiguration.count({
     where: { userId: profile.id, deploymentStatus: "VPS_ACTIVE" },
   });
@@ -50,16 +58,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Billing is not configured" }, { status: 500 });
     }
 
-    const checkoutSession = await stripe.checkout.sessions.create({
-      mode: "subscription",
-      client_reference_id: profile.id,
-      customer: profile.stripeCustomerId ?? undefined,
-      customer_email: profile.stripeCustomerId ? undefined : authUser.email,
-      line_items: [{ price: priceId, quantity: activeVpsBots + 1 }],
-      success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard?checkout=success`,
-      cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard?checkout=cancelled`,
-      metadata: { userId: profile.id },
-    });
+    let checkoutSession;
+    try {
+      checkoutSession = await stripe.checkout.sessions.create({
+        mode: "subscription",
+        client_reference_id: profile.id,
+        customer: profile.stripeCustomerId ?? undefined,
+        customer_email: profile.stripeCustomerId ? undefined : authUser.email,
+        line_items: [{ price: priceId, quantity: activeVpsBots + 1 }],
+        success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard?checkout=success`,
+        cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard?checkout=cancelled`,
+        metadata: { userId: profile.id },
+      });
+    } catch (err) {
+      console.error("[deploy] Stripe checkout session creation failed:", err);
+      const message = err instanceof Error ? err.message : "Could not start checkout";
+      return NextResponse.json({ error: `Billing error: ${message}` }, { status: 502 });
+    }
 
     return NextResponse.json({ requiresCheckout: true, checkoutUrl: checkoutSession.url });
   }
@@ -68,7 +83,8 @@ export async function POST(req: NextRequest) {
     const { bot: updatedBot, apiCredentials } = await deployBotToVps({ bot, supabase });
     return NextResponse.json({ requiresCheckout: false, bot: updatedBot, apiCredentials });
   } catch (err) {
+    console.error(`[deploy] Failed to provision VPS for bot ${bot.id}:`, err);
     const message = err instanceof Error ? err.message : "Failed to provision VPS";
     return NextResponse.json({ error: message }, { status: 502 });
   }
-}
+});

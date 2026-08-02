@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { botSelect, toBotDTO } from "@/lib/bot-select";
@@ -8,8 +10,22 @@ import {
   isValidFreqAIConfig,
   MAX_STRATEGY_CODE_LENGTH,
 } from "@/lib/strategy-validation";
+import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
-export async function GET() {
+// freqaiConfig's exact shape is validated separately by isValidFreqAIConfig
+// (see lib/strategy-validation.ts) — Zod only needs to confirm it's an
+// object here, not re-encode every nested field as a second schema.
+const createBotBodySchema = z.object({
+  botName: z.string().trim().min(1, "botName is required"),
+  exchangeConnectionId: z.string().min(1, "exchangeConnectionId is required"),
+  strategy: z.string().min(1, "strategy is required"),
+  strategyCode: z.string().min(1, "strategyCode is required"),
+  freqaiConfig: z.record(z.string(), z.unknown()),
+  autoSelectCoins: z.boolean().optional(),
+  pairWhitelist: z.string().optional(),
+});
+
+export const GET = withErrorHandling(async () => {
   const supabase = await createClient();
   const {
     data: { user },
@@ -25,9 +41,9 @@ export async function GET() {
   });
 
   return NextResponse.json({ bots: bots.map(toBotDTO) });
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withErrorHandling(async (req: NextRequest) => {
   const supabase = await createClient();
   const {
     data: { user },
@@ -36,20 +52,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await req.json();
-  const {
-    botName,
-    exchangeConnectionId,
-    strategy,
-    strategyCode,
-    freqaiConfig,
-    autoSelectCoins,
-    pairWhitelist,
-  } = body ?? {};
-
-  if (!botName || !exchangeConnectionId || !strategy || !strategyCode || !freqaiConfig) {
-    return NextResponse.json({ error: "Missing required bot configuration fields" }, { status: 400 });
-  }
+  const parsed = await parseJsonBody(req, createBotBodySchema);
+  if ("error" in parsed) return parsed.error;
+  const { botName, exchangeConnectionId, strategy, strategyCode, freqaiConfig, autoSelectCoins, pairWhitelist } =
+    parsed.data;
 
   // Must be a platform this user actually linked (see /platforms) — a bot
   // never holds its own exchange credentials anymore, only a reference to
@@ -62,13 +68,10 @@ export async function POST(req: NextRequest) {
   // Defaults to on (matches BotConfiguration.autoSelectCoins @default(true))
   // — an explicit false is the only way to require a manual whitelist.
   const autoSelect = autoSelectCoins !== false;
-  if (autoSelectCoins !== undefined && typeof autoSelectCoins !== "boolean") {
-    return NextResponse.json({ error: "autoSelectCoins must be a boolean" }, { status: 400 });
-  }
   // pairWhitelist is only meaningful — and only required — in manual mode;
   // in auto mode it's ignored and stored as null (lib/hetzner.ts configures
   // VolumePairList instead, see FreqAIProfileConfig-adjacent pairlist logic).
-  if (!autoSelect && (typeof pairWhitelist !== "string" || pairWhitelist.trim().length === 0)) {
+  if (!autoSelect && (!pairWhitelist || pairWhitelist.trim().length === 0)) {
     return NextResponse.json(
       { error: "pairWhitelist is required when auto-select is off — pick at least one pair" },
       { status: 400 },
@@ -92,7 +95,7 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
-  if (typeof strategyCode !== "string" || strategyCode.length > MAX_STRATEGY_CODE_LENGTH) {
+  if (strategyCode.length > MAX_STRATEGY_CODE_LENGTH) {
     return NextResponse.json(
       { error: `strategyCode must be a string under ${MAX_STRATEGY_CODE_LENGTH} characters` },
       { status: 400 },
@@ -118,7 +121,7 @@ export async function POST(req: NextRequest) {
       exchangeName: connection.exchangeName,
       strategy,
       strategyCode,
-      freqaiConfig,
+      freqaiConfig: freqaiConfig as Prisma.InputJsonValue,
       autoSelectCoins: autoSelect,
       pairWhitelist: autoSelect ? null : pairWhitelist,
       isPaperTrading: true,
@@ -128,4 +131,4 @@ export async function POST(req: NextRequest) {
   });
 
   return NextResponse.json({ bot: toBotDTO(bot) }, { status: 201 });
-}
+});

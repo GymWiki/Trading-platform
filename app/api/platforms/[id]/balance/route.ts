@@ -3,12 +3,13 @@ import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { decrypt } from "@/lib/encryption";
 import { fetchFreeBalance, BalanceFetchError } from "@/lib/ccxt-client";
+import { withErrorHandling } from "@/lib/api-handler";
 
 // Live refetch — balances aren't persisted (see ExchangeConnection in
 // prisma/schema.prisma), so both the /platforms "refresh" button and the
 // Go Live modal call this instead of trusting whatever was fetched at
 // connection-creation time, which could be stale by minutes or days.
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export const GET = withErrorHandling(async (_req: NextRequest, { params }: { params: { id: string } }) => {
   const supabase = await createClient();
   const {
     data: { user },
@@ -29,4 +30,4 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     const message = err instanceof BalanceFetchError || err instanceof Error ? err.message : "Could not fetch balance";
     return NextResponse.json({ error: message }, { status: 502 });
   }
-}
+});

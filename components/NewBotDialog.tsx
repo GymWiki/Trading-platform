@@ -11,6 +11,8 @@ import { Switch } from "@/components/ui/Switch";
 import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import { STRATEGY_PRESETS, type StrategyPreset } from "@/lib/strategy-presets";
 import { cn } from "@/lib/utils";
+import { apiFetch, toErrorMessage } from "@/lib/api-client";
+import type { PlatformWithBalance } from "@/lib/platforms";
 
 interface NewBotDialogProps {
   onCreated: (bot: BotConfigurationDTO) => void;
@@ -32,6 +34,7 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connections, setConnections] = useState<ExchangeConnectionDTO[] | null>(null);
+  const [connectionsError, setConnectionsError] = useState<string | null>(null);
 
   // Loaded fresh every time the dialog opens rather than once at mount —
   // the user may well come straight back from /platforms having just
@@ -39,11 +42,17 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
   // "no platforms yet" state.
   useEffect(() => {
     if (!open) return;
+    const controller = new AbortController();
     setConnections(null);
-    fetch("/api/platforms")
-      .then((res) => res.json())
-      .then((data) => setConnections(data.platforms.map((p: { connection: ExchangeConnectionDTO }) => p.connection).filter((c: ExchangeConnectionDTO) => c.isActive)))
-      .catch(() => setConnections([]));
+    setConnectionsError(null);
+    apiFetch<{ platforms: PlatformWithBalance[] }>("/api/platforms", { signal: controller.signal })
+      .then((data) => setConnections(data.platforms.map((p) => p.connection).filter((c) => c.isActive)))
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        setConnections([]);
+        setConnectionsError(toErrorMessage(err, "Kon platforms niet laden"));
+      });
+    return () => controller.abort();
   }, [open]);
 
   const selectedStrategy: StrategyPreset =
@@ -66,7 +75,7 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
 
     setIsSubmitting(true);
     try {
-      const res = await fetch("/api/bots", {
+      const data = await apiFetch<{ bot: BotConfigurationDTO }>("/api/bots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -79,13 +88,11 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
           pairWhitelist: form.autoSelectCoins ? undefined : form.pairs.join(","),
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to create bot");
       onCreated(data.bot);
       setForm(EMPTY_FORM);
       setOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create bot");
+      setError(toErrorMessage(err, "Failed to create bot"));
     } finally {
       setIsSubmitting(false);
     }
@@ -133,6 +140,11 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
             </Field>
 
             <FieldGroup label="Platform">
+              {connectionsError && (
+                <p className="mb-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                  {connectionsError}
+                </p>
+              )}
               {connections === null ? (
                 <div className="flex items-center justify-center rounded-lg border border-border bg-background py-6">
                   <Loader2 className="h-4 w-4 animate-spin text-slate-500" />

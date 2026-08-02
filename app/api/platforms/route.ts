@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
@@ -7,8 +8,18 @@ import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import { exchangeConnectionSelect, toExchangeConnectionDTO } from "@/lib/exchange-connection-select";
 import { fetchFreeBalance } from "@/lib/ccxt-client";
 import { listPlatformsForUser } from "@/lib/platforms";
+import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
-export async function GET() {
+// Closed list, not free text — matches EXCHANGE_PRESETS exactly, same as
+// the bot-creation boundary (see app/api/bots/route.ts).
+const exchangeIds = EXCHANGE_PRESETS.map((e) => e.id);
+const platformBodySchema = z.object({
+  exchangeName: z.string().refine((v) => exchangeIds.includes(v), { message: "exchangeName is not a supported exchange" }),
+  apiKey: z.string().trim().min(1, "apiKey is required"),
+  apiSecret: z.string().trim().min(1, "apiSecret is required"),
+});
+
+export const GET = withErrorHandling(async () => {
   const supabase = await createClient();
   const {
     data: { user },
@@ -19,9 +30,9 @@ export async function GET() {
 
   const platforms = await listPlatformsForUser(user.id);
   return NextResponse.json({ platforms });
-}
+});
 
-export async function POST(req: NextRequest) {
+export const POST = withErrorHandling(async (req: NextRequest) => {
   const supabase = await createClient();
   const {
     data: { user },
@@ -30,17 +41,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await req.json();
-  const { exchangeName, apiKey, apiSecret } = body ?? {};
-
-  // Closed list, not free text — matches EXCHANGE_PRESETS exactly, same as
-  // the bot-creation boundary (see app/api/bots/route.ts).
-  if (!EXCHANGE_PRESETS.some((e) => e.id === exchangeName)) {
-    return NextResponse.json({ error: "exchangeName is not a supported exchange" }, { status: 400 });
-  }
-  if (typeof apiKey !== "string" || !apiKey.trim() || typeof apiSecret !== "string" || !apiSecret.trim()) {
-    return NextResponse.json({ error: "apiKey and apiSecret are required" }, { status: 400 });
-  }
+  const parsed = await parseJsonBody(req, platformBodySchema);
+  if ("error" in parsed) return parsed.error;
+  const { exchangeName, apiKey, apiSecret } = parsed.data;
 
   let created;
   try {
@@ -69,6 +72,7 @@ export async function POST(req: NextRequest) {
   try {
     balance = await fetchFreeBalance(created.exchangeName, decrypt(created.apiKey), decrypt(created.apiSecret));
   } catch (err) {
+    console.error(`[platforms] Initial balance fetch failed for connection ${created.id}:`, err);
     balanceError = err instanceof Error ? err.message : "Could not fetch balance";
   }
 
@@ -76,4 +80,4 @@ export async function POST(req: NextRequest) {
     { platform: { connection: toExchangeConnectionDTO(created), balance, balanceError } },
     { status: 201 },
   );
-}
+});

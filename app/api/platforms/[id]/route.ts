@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
+import { withErrorHandling } from "@/lib/api-handler";
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export const DELETE = withErrorHandling(async (_req: NextRequest, { params }: { params: { id: string } }) => {
   const supabase = await createClient();
   const {
     data: { user },
@@ -28,7 +30,28 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
     );
   }
 
-  await prisma.exchangeConnection.delete({ where: { id: connection.id } });
+  try {
+    await prisma.exchangeConnection.delete({ where: { id: connection.id } });
+  } catch (err) {
+    // Defense in depth against the count-then-delete race above (a bot
+    // could theoretically be created against this connection in between):
+    // P2003 is Prisma's foreign key constraint violation, P2025 is "record
+    // to delete does not exist" (already gone). Both are real, expected
+    // outcomes here, not bugs — surface them as normal 4xx responses
+    // instead of letting withErrorHandling turn them into a generic 500.
+    if (err instanceof Prisma.PrismaClientKnownRequestError) {
+      if (err.code === "P2003") {
+        return NextResponse.json(
+          { error: "Kan niet verwijderen: dit platform wordt nog door een bot gebruikt." },
+          { status: 409 },
+        );
+      }
+      if (err.code === "P2025") {
+        return NextResponse.json({ error: "Platform not found" }, { status: 404 });
+      }
+    }
+    throw err;
+  }
 
   return NextResponse.json({ success: true });
-}
+});

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { prisma } from "@/lib/prisma";
 import { deleteHetznerServer } from "@/lib/hetzner";
+import { withErrorHandling } from "@/lib/api-handler";
 
 // A TRAINING job older than this has blown well past the cloud-init
 // script's own `timeout ... 4h` ceiling (see lib/hetzner.ts maxRuntimeHours)
@@ -36,7 +37,7 @@ function isAuthorized(req: NextRequest): boolean {
 // configured on the scheduler's side — deliberately not Vercel Cron, so
 // this route makes no assumption about how the request was scheduled and
 // only ever trusts a literal, exact bearer-token match.
-export async function GET(req: NextRequest) {
+export const GET = withErrorHandling(async (req: NextRequest) => {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -74,4 +75,4 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({ reaped: results.length, results });
-}
+});

@@ -19,6 +19,43 @@ export interface FreeBalance {
   amount: number;
 }
 
+// Vercel functions have their own hard ceiling (10-60s depending on plan);
+// this keeps a single ccxt call well under that so a slow/hanging exchange
+// fails fast with a translatable RequestTimeout instead of taking the whole
+// function down with it.
+const CCXT_TIMEOUT_MS = 10_000;
+
+// Translates ccxt's exception hierarchy into a message a non-technical user
+// can act on, instead of a raw stack trace. Order matters: ccxt's own
+// classes nest (RequestTimeout/ExchangeNotAvailable/RateLimitExceeded are
+// all NetworkError subclasses, PermissionDenied is an AuthenticationError
+// subclass), so the more specific checks must run before their parents.
+function translateCcxtError(err: unknown, exchangeName: string): string {
+  if (err instanceof ccxt.PermissionDenied) {
+    return `De API-key voor ${exchangeName} heeft niet genoeg rechten (permission denied). Controleer de key-permissies.`;
+  }
+  if (err instanceof ccxt.AuthenticationError) {
+    return `De API-key of -secret voor ${exchangeName} is ongeldig. Controleer je gegevens en probeer opnieuw.`;
+  }
+  if (err instanceof ccxt.RateLimitExceeded || err instanceof ccxt.DDoSProtection) {
+    return `${exchangeName} ontvangt te veel verzoeken op dit moment. Probeer het over een paar minuten opnieuw.`;
+  }
+  if (err instanceof ccxt.RequestTimeout) {
+    return `De verbinding met ${exchangeName} verliep te traag (timeout). Probeer het opnieuw.`;
+  }
+  if (err instanceof ccxt.OnMaintenance || err instanceof ccxt.ExchangeNotAvailable) {
+    return `${exchangeName} is momenteel niet bereikbaar (onderhoud of storing). Probeer het later opnieuw.`;
+  }
+  if (err instanceof ccxt.NetworkError) {
+    return `Kon geen verbinding maken met ${exchangeName}. Controleer je internetverbinding en probeer opnieuw.`;
+  }
+  if (err instanceof ccxt.ExchangeError) {
+    return `${exchangeName} gaf een foutmelding: ${err.message}`;
+  }
+  const message = err instanceof Error ? err.message : "Unknown error";
+  return `Kon balans niet ophalen van ${exchangeName}: ${message}`;
+}
+
 // The one place this app talks to a real exchange's balance endpoint —
 // used both by /platforms (show what's available right after connecting)
 // and the Go Live flow (the $50 minimum-balance gate). Read-only: only
@@ -37,14 +74,15 @@ export async function fetchFreeBalance(exchangeName: string, apiKey: string, api
     apiKey,
     secret: apiSecret,
     enableRateLimit: true,
+    timeout: CCXT_TIMEOUT_MS,
   });
 
   let balance: Balances;
   try {
     balance = await exchange.fetchBalance();
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    throw new BalanceFetchError(`Could not fetch balance from ${exchangeName}: ${message}`);
+    console.error(`[ccxt-client] fetchBalance failed for ${exchangeName}:`, err);
+    throw new BalanceFetchError(translateCcxtError(err, exchangeName));
   }
 
   // USDT first (the platform's default stake currency everywhere else —

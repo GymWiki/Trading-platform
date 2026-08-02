@@ -21,34 +21,39 @@ export default function SignupPage() {
     setError(null);
     setIsSubmitting(true);
 
-    const supabase = createClient();
-    const { data, error: signUpError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { name } },
-    });
+    try {
+      const supabase = createClient();
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { name } },
+      });
 
-    setIsSubmitting(false);
+      if (signUpError) {
+        setError(
+          signUpError.message === "User already registered"
+            ? "Er bestaat al een account met dit e-mailadres"
+            : signUpError.message,
+        );
+        return;
+      }
 
-    if (signUpError) {
-      setError(
-        signUpError.message === "User already registered"
-          ? "Er bestaat al een account met dit e-mailadres"
-          : signUpError.message,
-      );
-      return;
+      // Projects with "Confirm email" enabled don't return a session until
+      // the user clicks the confirmation link — send them to /login with a
+      // hint instead of a dashboard they can't actually reach yet.
+      if (!data.session) {
+        setNeedsEmailConfirmation(true);
+        return;
+      }
+
+      router.push("/dashboard");
+      router.refresh();
+    } catch (err) {
+      console.error("[SignupPage] Sign up failed:", err);
+      setError("Registreren is mislukt. Probeer het opnieuw.");
+    } finally {
+      setIsSubmitting(false);
     }
-
-    // Projects with "Confirm email" enabled don't return a session until the
-    // user clicks the confirmation link — send them to /login with a hint
-    // instead of a dashboard they can't actually reach yet.
-    if (!data.session) {
-      setNeedsEmailConfirmation(true);
-      return;
-    }
-
-    router.push("/dashboard");
-    router.refresh();
   }
 
   if (needsEmailConfirmation) {

@@ -5,6 +5,7 @@ import { AlertTriangle, Loader2, Rocket, X } from "lucide-react";
 import type { BotConfigurationDTO } from "@/lib/types";
 import { BudgetSlider } from "@/components/ui/BudgetSlider";
 import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
+import { apiFetch, toErrorMessage } from "@/lib/api-client";
 
 interface GoLiveModalProps {
   bot: BotConfigurationDTO;
@@ -35,30 +36,38 @@ export function GoLiveModal({ bot, onClose, onLive }: GoLiveModalProps) {
   const exchangeLabel = EXCHANGE_PRESETS.find((e) => e.id === check?.exchangeName)?.label ?? check?.exchangeName;
 
   useEffect(() => {
-    fetch(`/api/bots/${bot.id}/golive`)
-      .then(async (res) => {
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "Kon saldo niet ophalen");
+    // A user can close the modal (or it can be unmounted by a parent
+    // re-render) before this resolves — the abort signal both cancels the
+    // in-flight request and lets the .catch below tell an aborted fetch
+    // apart from a real failure, so we never call setState on an unmounted
+    // component.
+    const controller = new AbortController();
+
+    apiFetch<BalanceCheck>(`/api/bots/${bot.id}/golive`, { signal: controller.signal })
+      .then((data) => {
         setCheck(data);
         setTotalBudget(Math.min(data.balance.amount, 500));
       })
-      .catch((err) => setLoadError(err instanceof Error ? err.message : "Kon saldo niet ophalen"));
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        setLoadError(toErrorMessage(err, "Kon saldo niet ophalen"));
+      });
+
+    return () => controller.abort();
   }, [bot.id]);
 
   async function handleConfirm() {
     setSubmitError(null);
     setIsSubmitting(true);
     try {
-      const res = await fetch(`/api/bots/${bot.id}/golive`, {
+      const data = await apiFetch<{ bot: BotConfigurationDTO }>(`/api/bots/${bot.id}/golive`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ totalBudget, maxStakePercentage }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Live gaan is mislukt");
       onLive(data.bot);
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : "Live gaan is mislukt");
+      setSubmitError(toErrorMessage(err, "Live gaan is mislukt"));
     } finally {
       setIsSubmitting(false);
     }

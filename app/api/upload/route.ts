@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
+import { withErrorHandling } from "@/lib/api-handler";
 
 const MAX_FILE_SIZE_BYTES = 200 * 1024 * 1024; // 200MB, matches the "models" bucket's file_size_limit
 const MODELS_BUCKET = "models";
 
-export async function POST(req: NextRequest) {
+export const POST = withErrorHandling(async (req: NextRequest) => {
   const supabase = await createClient();
   const {
     data: { user },
@@ -70,4 +71,4 @@ export async function POST(req: NextRequest) {
   });
 
   return NextResponse.json({ aiModelPath: updated.aiModelPath });
-}
+});

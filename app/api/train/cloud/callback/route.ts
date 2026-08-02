@@ -1,11 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { createClient as createServiceRoleClient } from "@supabase/supabase-js";
 import { prisma } from "@/lib/prisma";
 import { extractBearerToken, hashCallbackToken } from "@/lib/training-token";
 import { deleteHetznerServer } from "@/lib/hetzner";
 import { deployBotToVps } from "@/lib/deploy-bot";
+import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
 const MAX_ERROR_MESSAGE_LENGTH = 2000;
+
+const callbackBodySchema = z.object({
+  status: z.enum(["COMPLETED", "FAILED"]),
+  // Deliberately NOT length-bounded here (unlike most Zod schemas in this
+  // app, which reject out-of-range input): rejecting an over-long message
+  // with a 400 would leave this job stuck QUEUED/TRAINING forever, since
+  // the training VM only calls this endpoint once. Truncating below is
+  // safer than failing the one callback that's supposed to record the
+  // terminal status no matter what.
+  errorMessage: z.string().nullish(),
+});
 
 // Called once by the training VM when it finishes (successfully or not).
 // This is failsafe layer 2 of 3: on top of the VM's own trap-based
@@ -13,7 +26,7 @@ const MAX_ERROR_MESSAGE_LENGTH = 2000;
 // (layer 3), we also attempt the delete here ourselves, using our own
 // privileged HETZNER_API_TOKEN rather than the one embedded in cloud-init —
 // redundant on purpose, in case the VM's own delete call fails.
-export async function POST(req: NextRequest) {
+export const POST = withErrorHandling(async (req: NextRequest) => {
   const token = extractBearerToken(req.headers.get("authorization"));
   if (!token) {
     return NextResponse.json({ error: "Missing bearer token" }, { status: 401 });
@@ -32,14 +45,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  const body = await req.json().catch(() => null);
-  const status = body?.status;
-  const rawErrorMessage = typeof body?.errorMessage === "string" ? body.errorMessage : null;
-  const errorMessage = rawErrorMessage?.slice(0, MAX_ERROR_MESSAGE_LENGTH) ?? null;
-
-  if (status !== "COMPLETED" && status !== "FAILED") {
-    return NextResponse.json({ error: "status must be COMPLETED or FAILED" }, { status: 400 });
-  }
+  const parsed = await parseJsonBody(req, callbackBodySchema);
+  if ("error" in parsed) return parsed.error;
+  const { status } = parsed.data;
+  const errorMessage = parsed.data.errorMessage?.slice(0, MAX_ERROR_MESSAGE_LENGTH) ?? null;
 
   // A COMPLETED report with no recorded model path is a contradiction —
   // the upload-url route always sets aiModelPath before the VM could have
@@ -48,7 +57,7 @@ export async function POST(req: NextRequest) {
   const finalErrorMessage =
     finalStatus === "FAILED" && !errorMessage && status === "COMPLETED"
       ? "Reported COMPLETED but no model path was ever recorded for this job"
-      : errorMessage;
+      : (errorMessage ?? null);
 
   await prisma.trainingJob.update({
     where: { id: job.id },
@@ -79,6 +88,7 @@ export async function POST(req: NextRequest) {
         const freshBot = await prisma.botConfiguration.findUniqueOrThrow({ where: { id: bot.id } });
         await deployBotToVps({ bot: freshBot, supabase });
       } catch (err) {
+        console.error(`[train/cloud/callback] Failed to redeploy bot ${bot.id} after retrain:`, err);
         const message = err instanceof Error ? err.message : "Failed to redeploy after retrain";
         await prisma.botConfiguration.update({
           where: { id: bot.id },
@@ -106,10 +116,11 @@ export async function POST(req: NextRequest) {
     try {
       await deleteHetznerServer(job.hetznerServerId);
       await prisma.trainingJob.update({ where: { id: job.id }, data: { hetznerServerId: null } });
-    } catch {
+    } catch (err) {
       // Leave hetznerServerId set — the reaper cron (layer 3) will retry.
+      console.error(`[train/cloud/callback] Failed to delete Hetzner server for job ${job.id}:`, err);
     }
   }
 
   return NextResponse.json({ ok: true });
-}
+});

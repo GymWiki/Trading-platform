@@ -5,6 +5,8 @@ import { Link2 } from "lucide-react";
 import { AddPlatformDialog } from "@/components/AddPlatformDialog";
 import { PlatformCard } from "@/components/PlatformCard";
 import type { PlatformWithBalance } from "@/lib/platforms";
+import { apiFetch } from "@/lib/api-client";
+import type { FreeBalance } from "@/lib/ccxt-client";
 
 interface PlatformsGridProps {
   initialPlatforms: PlatformWithBalance[];
@@ -18,20 +20,14 @@ export function PlatformsGrid({ initialPlatforms }: PlatformsGridProps) {
   }
 
   async function handleRefresh(id: string) {
-    const res = await fetch(`/api/platforms/${id}/balance`);
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error ?? "Refresh failed");
+    const data = await apiFetch<{ balance: FreeBalance }>(`/api/platforms/${id}/balance`);
     setPlatforms((prev) =>
       prev.map((p) => (p.connection.id === id ? { ...p, balance: data.balance, balanceError: null } : p)),
     );
   }
 
   async function handleDelete(id: string) {
-    const res = await fetch(`/api/platforms/${id}`, { method: "DELETE" });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error ?? "Delete failed");
-    }
+    await apiFetch(`/api/platforms/${id}`, { method: "DELETE" });
     setPlatforms((prev) => prev.filter((p) => p.connection.id !== id));
   }
 

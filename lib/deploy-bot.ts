@@ -38,8 +38,15 @@ export async function deployBotToVps({ bot, supabase }: DeployBotParams) {
 
   // Bots no longer carry their own exchange credentials — they reference a
   // linked ExchangeConnection (see /platforms) instead, so the real keys
-  // live there and are fetched fresh on every (re)deploy.
-  const connection = await prisma.exchangeConnection.findUniqueOrThrow({ where: { id: bot.exchangeConnectionId } });
+  // live there and are fetched fresh on every (re)deploy. findUnique (not
+  // OrThrow) because the connection can be deleted out from under an
+  // already-created bot between creation and a later redeploy — a plain
+  // Prisma "not found" would surface as an opaque 500 to whichever caller
+  // wraps this (POST /api/deploy, the training callback, Go Live).
+  const connection = await prisma.exchangeConnection.findUnique({ where: { id: bot.exchangeConnectionId } });
+  if (!connection) {
+    throw new Error("The exchange platform linked to this bot no longer exists — reconnect it under /platforms.");
+  }
 
   // The "models" bucket is private, so the Hetzner VPS (which has no
   // Supabase session) needs a short-lived signed URL to fetch the file
