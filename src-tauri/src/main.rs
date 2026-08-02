@@ -32,6 +32,7 @@ async fn train_local_model(
     strategy: String,
     strategy_code: String,
     exchange_name: String,
+    auto_select_coins: bool,
     pair_whitelist: String,
 ) -> Result<String, String> {
     // `strategy` becomes a filename (user_data/strategies/<strategy>.py) —
@@ -55,14 +56,33 @@ async fn train_local_model(
     std::fs::write(strategies_dir.join(format!("{strategy}.py")), &strategy_code)
         .map_err(|e| format!("could not write strategy file: {e}"))?;
 
-    let pairs: Vec<String> = pair_whitelist
-        .split(',')
-        .map(|p| p.trim().to_string())
-        .filter(|p| !p.is_empty())
-        .collect();
-    if pairs.is_empty() {
-        return Err("pairWhitelist must contain at least one pair".into());
-    }
+    // Mirrors buildPairlistConfig in lib/hetzner.ts: auto-select hands the
+    // pair universe to freqtrade's own VolumePairList (top-30 USDT markets
+    // by 24h volume) instead of requiring the user to have typed a manual
+    // list — local training should behave identically to cloud training,
+    // not silently fall back to a stricter rule.
+    let (pair_whitelist_value, pairlists_value) = if auto_select_coins {
+        (
+            serde_json::json!([".*/USDT"]),
+            serde_json::json!([{
+                "method": "VolumePairList",
+                "number_assets": 30,
+                "sort_key": "quoteVolume",
+                "min_value": 0,
+                "refresh_period": 1800,
+            }]),
+        )
+    } else {
+        let pairs: Vec<String> = pair_whitelist
+            .split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+        if pairs.is_empty() {
+            return Err("pairWhitelist must contain at least one pair when auto-select is off".into());
+        }
+        (serde_json::json!(pairs), serde_json::json!([{ "method": "StaticPairList" }]))
+    };
 
     let config = serde_json::json!({
         "stake_currency": "USDT",
@@ -73,10 +93,10 @@ async fn train_local_model(
             "name": exchange_name,
             "key": "",
             "secret": "",
-            "pair_whitelist": pairs,
+            "pair_whitelist": pair_whitelist_value,
             "pair_blacklist": [],
         },
-        "pairlists": [{ "method": "StaticPairList" }],
+        "pairlists": pairlists_value,
         "freqai": {
             "enabled": true,
             "identifier": format!("{bot_id}-model"),

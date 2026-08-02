@@ -157,6 +157,51 @@ function writeFilesBlock(entries: Array<{ path: string; content: string; permiss
     .join("\n");
 }
 
+const STAKE_CURRENCY = "USDT";
+// How many of the exchange's top-liquid USDT markets VolumePairList hands
+// to FreqAI when auto-select is on — wide enough for the AI to find real
+// opportunities, small enough that feature engineering/backtesting for a
+// single training run stays bounded.
+const AUTO_PAIRLIST_SIZE = 30;
+
+interface PairlistConfig {
+  pair_whitelist: string[];
+  pairlists: Array<Record<string, unknown>>;
+}
+
+// FreqAI needs some universe of pairs to run its per-candle predictions
+// against. Auto-select hands that choice to freqtrade's own VolumePairList
+// instead of a fixed list the user typed in: it re-ranks the exchange's
+// USDT markets by 24h quote volume on every refresh_period and feeds
+// whatever's currently most liquid to the strategy, so the bot keeps
+// trading where there's real volume instead of stalling on a pair that
+// went quiet. Manual mode is the opposite trade-off — a fixed, predictable
+// set the user explicitly chose — via StaticPairList. Shared by both
+// cloud-init builders below so live trading and FreqAI training (which
+// still resolves its pairlist through freqtrade's own `download-data`/
+// `backtesting`, not a hardcoded --pairs list) always agree on what
+// "the bot's pairs" means for a given bot.
+function buildPairlistConfig(autoSelectCoins: boolean, pairWhitelist: string[]): PairlistConfig {
+  if (autoSelectCoins) {
+    return {
+      pair_whitelist: [`.*/${STAKE_CURRENCY}`],
+      pairlists: [
+        {
+          method: "VolumePairList",
+          number_assets: AUTO_PAIRLIST_SIZE,
+          sort_key: "quoteVolume",
+          min_value: 0,
+          refresh_period: 1800,
+        },
+      ],
+    };
+  }
+  return {
+    pair_whitelist: pairWhitelist,
+    pairlists: [{ method: "StaticPairList" }],
+  };
+}
+
 interface CloudInitParams {
   botName: string;
   exchangeName: string;
@@ -166,6 +211,9 @@ interface CloudInitParams {
   strategyCode: string;
   /** Every bot runs FreqAI — this drives the generated freqai config.json block (see lib/strategy-presets.ts). */
   freqaiConfig: FreqAIProfileConfig;
+  /** When true, pairWhitelist below is ignored and VolumePairList picks the pairs instead (see buildPairlistConfig). */
+  autoSelectCoins: boolean;
+  /** The user's manual pair selection — only used when autoSelectCoins is false. */
   pairWhitelist: string[];
   /** Total amount (stake_currency) this bot may put to work. freqtrade itself is told "unlimited" — custom_stake_amount in the strategy code is the real sizing logic, reading this back via custom_user_settings. */
   totalBudget: number;
@@ -199,6 +247,7 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
     strategy,
     strategyCode,
     freqaiConfig,
+    autoSelectCoins,
     pairWhitelist,
     totalBudget,
     maxStakePercentage,
@@ -213,10 +262,11 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
 
   assertSafePythonIdentifier(strategy, "strategy");
   const safeBotName = botName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+  const pairlistConfig = buildPairlistConfig(autoSelectCoins, pairWhitelist);
 
   const freqtradeConfig = {
     max_open_trades: 5,
-    stake_currency: "USDT",
+    stake_currency: STAKE_CURRENCY,
     // "unlimited" hands sizing entirely to custom_stake_amount in the
     // strategy code, which reads total_budget/max_stake_pct back out of
     // custom_user_settings below — a fixed config.json number can't scale
@@ -239,10 +289,10 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
       secret: exchangeApiSecret,
       ccxt_config: {},
       ccxt_async_config: {},
-      pair_whitelist: pairWhitelist,
+      pair_whitelist: pairlistConfig.pair_whitelist,
       pair_blacklist: [],
     },
-    pairlists: [{ method: "StaticPairList" }],
+    pairlists: pairlistConfig.pairlists,
     strategy,
     // Every bot runs FreqAI — freqaimodel is a top-level config key (also
     // settable via --freqaimodel on the CLI, which the training pipeline
@@ -338,6 +388,8 @@ interface TrainingCloudInitParams {
   strategyCode: string;
   /** Every bot runs FreqAI — drives the training window, feature set, and downloaded history range. */
   freqaiConfig: FreqAIProfileConfig;
+  /** Same auto/manual pairlist choice the live deploy gets — see buildPairlistConfig. */
+  autoSelectCoins: boolean;
   pairWhitelist: string[];
   /** Same budget/risk settings the live deploy gets — backtesting (which is how FreqAI training runs) still exercises custom_stake_amount, so it needs a real custom_user_settings block too. */
   totalBudget: number;
@@ -380,6 +432,7 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     strategy,
     strategyCode,
     freqaiConfig,
+    autoSelectCoins,
     pairWhitelist,
     totalBudget,
     maxStakePercentage,
@@ -397,6 +450,7 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
 
   const safeBotName = botName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
   const timeframe = freqaiConfig.features.baseTimeframe;
+  const pairlistConfig = buildPairlistConfig(autoSelectCoins, pairWhitelist);
 
   const today = new Date();
   const start = new Date(today.getTime() - timerangeDays * 24 * 60 * 60 * 1000);
@@ -404,7 +458,7 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
   const timerange = `${fmt(start)}-${fmt(today)}`;
 
   const trainingConfig = {
-    stake_currency: "USDT",
+    stake_currency: STAKE_CURRENCY,
     stake_amount: "unlimited",
     dry_run: true,
     dry_run_wallet: totalBudget,
@@ -419,10 +473,10 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
       secret: "",
       ccxt_config: {},
       ccxt_async_config: {},
-      pair_whitelist: pairWhitelist,
+      pair_whitelist: pairlistConfig.pair_whitelist,
       pair_blacklist: [],
     },
-    pairlists: [{ method: "StaticPairList" }],
+    pairlists: pairlistConfig.pairlists,
     freqaimodel: freqaiConfig.freqaiModel,
     ...(freqaiConfig.positionAdjustment?.enabled && {
       position_adjustment_enable: true,

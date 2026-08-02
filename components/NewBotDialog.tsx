@@ -8,6 +8,7 @@ import { InfoTooltip } from "@/components/ui/Tooltip";
 import { StrategyPicker } from "@/components/ui/StrategyPicker";
 import { PairSelector } from "@/components/ui/PairSelector";
 import { BudgetSlider } from "@/components/ui/BudgetSlider";
+import { Switch } from "@/components/ui/Switch";
 import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import { STRATEGY_PRESETS, type StrategyPreset } from "@/lib/strategy-presets";
 
@@ -23,6 +24,7 @@ const EMPTY_FORM = {
   exchangeApiKey: "",
   exchangeApiSecret: "",
   strategyId: DEFAULT_STRATEGY.id,
+  autoSelectCoins: true,
   pairs: ["BTC/USDT", "ETH/USDT"] as string[],
   totalBudget: 500,
   maxStakePercentage: 20,
@@ -36,13 +38,14 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
 
   const selectedStrategy: StrategyPreset =
     STRATEGY_PRESETS.find((s) => s.id === form.strategyId) ?? DEFAULT_STRATEGY;
+  const selectedExchange = EXCHANGE_PRESETS.find((e) => e.id === form.exchangeName);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
 
-    if (form.pairs.length === 0) {
-      setError("Kies minstens 1 handelspaar.");
+    if (!form.autoSelectCoins && form.pairs.length === 0) {
+      setError("Kies minstens 1 handelspaar, of zet automatische coin-selectie aan.");
       return;
     }
 
@@ -59,7 +62,8 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
           strategy: selectedStrategy.className,
           strategyCode: selectedStrategy.code,
           freqaiConfig: selectedStrategy.freqaiConfig,
-          pairWhitelist: form.pairs.join(","),
+          autoSelectCoins: form.autoSelectCoins,
+          pairWhitelist: form.autoSelectCoins ? undefined : form.pairs.join(","),
           totalBudget: form.totalBudget,
           maxStakePercentage: form.maxStakePercentage,
           isPaperTrading: true,
@@ -163,7 +167,29 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
             </FieldGroup>
 
             <FieldGroup label="Handelsparen">
-              <PairSelector selected={form.pairs} onChange={(pairs) => setForm({ ...form, pairs })} />
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2.5">
+                  <span id="auto-select-coins-label" className="text-xs font-medium text-slate-200">
+                    Laat FreqAI automatisch de beste coins kiezen{" "}
+                    <span className="text-primary">(Aanbevolen)</span>
+                  </span>
+                  <Switch
+                    checked={form.autoSelectCoins}
+                    onChange={(autoSelectCoins) => setForm({ ...form, autoSelectCoins })}
+                    aria-labelledby="auto-select-coins-label"
+                  />
+                </div>
+
+                {form.autoSelectCoins ? (
+                  <p className="rounded-lg bg-background px-3 py-2 text-[11px] leading-relaxed text-slate-400">
+                    De bot scant dynamisch de top-liquide markten op{" "}
+                    <span className="text-slate-300">{selectedExchange?.label ?? "je exchange"}</span> en laat de
+                    AI handelen waar de kansen het grootst zijn.
+                  </p>
+                ) : (
+                  <PairSelector selected={form.pairs} onChange={(pairs) => setForm({ ...form, pairs })} />
+                )}
+              </div>
             </FieldGroup>
 
             <FieldGroup

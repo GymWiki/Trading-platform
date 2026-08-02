@@ -20,7 +20,8 @@ export interface BotConfigurationDTO {
   strategy: string;
   strategyCode: string;
   freqaiConfig: FreqAIProfileConfig;
-  pairWhitelist: string;
+  autoSelectCoins: boolean;
+  pairWhitelist: string | null;
   totalBudget: number;
   maxStakePercentage: number;
   isPaperTrading: boolean;

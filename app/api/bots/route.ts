@@ -47,6 +47,7 @@ export async function POST(req: NextRequest) {
     strategy,
     strategyCode,
     freqaiConfig,
+    autoSelectCoins,
     pairWhitelist,
     totalBudget,
     maxStakePercentage,
@@ -61,11 +62,26 @@ export async function POST(req: NextRequest) {
     !strategy ||
     !strategyCode ||
     !freqaiConfig ||
-    !pairWhitelist ||
     typeof totalBudget !== "number" ||
     typeof maxStakePercentage !== "number"
   ) {
     return NextResponse.json({ error: "Missing required bot configuration fields" }, { status: 400 });
+  }
+
+  // Defaults to on (matches BotConfiguration.autoSelectCoins @default(true))
+  // — an explicit false is the only way to require a manual whitelist.
+  const autoSelect = autoSelectCoins !== false;
+  if (autoSelectCoins !== undefined && typeof autoSelectCoins !== "boolean") {
+    return NextResponse.json({ error: "autoSelectCoins must be a boolean" }, { status: 400 });
+  }
+  // pairWhitelist is only meaningful — and only required — in manual mode;
+  // in auto mode it's ignored and stored as null (lib/hetzner.ts configures
+  // VolumePairList instead, see FreqAIProfileConfig-adjacent pairlist logic).
+  if (!autoSelect && (typeof pairWhitelist !== "string" || pairWhitelist.trim().length === 0)) {
+    return NextResponse.json(
+      { error: "pairWhitelist is required when auto-select is off — pick at least one pair" },
+      { status: 400 },
+    );
   }
 
   // Closed list, not free text (see lib/exchange-presets.ts) — exchangeName
@@ -126,7 +142,8 @@ export async function POST(req: NextRequest) {
       strategy,
       strategyCode,
       freqaiConfig,
-      pairWhitelist,
+      autoSelectCoins: autoSelect,
+      pairWhitelist: autoSelect ? null : pairWhitelist,
       totalBudget,
       maxStakePercentage,
       isPaperTrading: isPaperTrading ?? true,

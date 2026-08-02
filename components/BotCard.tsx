@@ -99,7 +99,8 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
         strategy: bot.strategy,
         strategyCode: bot.strategyCode,
         exchangeName: bot.exchangeName,
-        pairWhitelist: bot.pairWhitelist,
+        autoSelectCoins: bot.autoSelectCoins,
+        pairWhitelist: bot.pairWhitelist ?? "",
       });
 
       const bytes = await readFile(modelPath);
@@ -144,7 +145,11 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
       bot_name: bot.botName,
       exchange: bot.exchangeName,
       strategy: bot.strategy,
-      pair_whitelist: bot.pairWhitelist.split(",").map((p) => p.trim()),
+      auto_select_coins: bot.autoSelectCoins,
+      pair_whitelist: bot.autoSelectCoins
+        ? null
+        : bot.pairWhitelist?.split(",").map((p) => p.trim()) ?? null,
+      pairlist_method: bot.autoSelectCoins ? "VolumePairList (top 30 USDT by volume)" : "StaticPairList",
       stake_amount: "unlimited",
       custom_user_settings: { total_budget: bot.totalBudget, max_stake_pct: bot.maxStakePercentage },
       dry_run: bot.isPaperTrading,

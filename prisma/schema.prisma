@@ -93,7 +93,14 @@ model BotConfiguration {
   // build the real freqai config.json block from it on every (re)deploy or
   // training run, rather than from generic hardcoded defaults.
   freqaiConfig  Json    @map("freqai_config")
-  pairWhitelist String  @map("pair_whitelist") // comma-separated pairs, e.g. "BTC/USDT,ETH/USDT"
+  // When true (the default), pairWhitelist is ignored and lib/hetzner.ts
+  // configures freqtrade's VolumePairList instead of a static list — FreqAI
+  // dynamically trades whatever the exchange's own top-liquid USDT markets
+  // are at the time, re-evaluated on freqtrade's own refresh_period.
+  autoSelectCoins Boolean @default(true) @map("auto_select_coins")
+  // The user's manual pair selection. Only required (and only read) when
+  // autoSelectCoins is false — null/empty whenever auto-select is on.
+  pairWhitelist String? @map("pair_whitelist") // comma-separated pairs, e.g. "BTC/USDT,ETH/USDT"
   // The total amount (in stake_currency) this bot is allowed to put to work
   // across all its open trades. Freqtrade itself is told stake_amount is
   // "unlimited" (see lib/hetzner.ts) — sizing per trade is real Python logic
