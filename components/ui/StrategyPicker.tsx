@@ -1,13 +1,13 @@
 "use client";
 
-import { Bot, TrendingUp, Sparkles, type LucideIcon } from "lucide-react";
+import { Zap, Repeat, TrendingUp, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { STRATEGY_PRESETS, type StrategyPreset } from "@/lib/strategy-presets";
 
 const ICONS: Record<string, LucideIcon> = {
-  "conservative-scalper": Bot,
-  "trend-follower": TrendingUp,
-  "ai-predictor": Sparkles,
+  "ai-smart-scalper": Zap,
+  "ai-dynamic-dca": Repeat,
+  "ai-trend-catcher": TrendingUp,
 };
 
 const RISK_STYLES: Record<StrategyPreset["risk"], string> = {
@@ -23,13 +23,15 @@ interface StrategyPickerProps {
 
 // A visual, jargon-free replacement for a raw "strategy class name" text
 // field. The user only ever sees a title + plain-language description;
-// preset.className/preset.code (the actual technical wiring the backend
-// needs) travel along automatically once a card is picked.
+// preset.className/preset.code/preset.freqaiConfig (the actual technical
+// wiring the backend needs) travel along automatically once a card is
+// picked. Every card here runs on FreqAI — this picker chooses the AI's
+// *behavior*, not whether AI is involved at all.
 export function StrategyPicker({ selectedId, onSelect }: StrategyPickerProps) {
   return (
-    <div role="radiogroup" aria-label="Kies een strategie" className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+    <div role="radiogroup" aria-label="Kies het AI-gedrag van je bot" className="grid grid-cols-1 gap-2 sm:grid-cols-3">
       {STRATEGY_PRESETS.map((preset) => {
-        const Icon = ICONS[preset.id] ?? Bot;
+        const Icon = ICONS[preset.id] ?? Zap;
         const checked = preset.id === selectedId;
         return (
           <button

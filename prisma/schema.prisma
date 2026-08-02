@@ -87,6 +87,12 @@ model BotConfiguration {
   // is deployed or trained on — without it, the container has nothing to
   // load and fails at startup.
   strategyCode  String  @map("strategy_code")
+  // Every bot runs on FreqAI — this is the structured training/feature/risk
+  // config for the chosen AI behavior (see lib/strategy-presets.ts
+  // FreqAIProfileConfig), captured at creation time so lib/hetzner.ts can
+  // build the real freqai config.json block from it on every (re)deploy or
+  // training run, rather than from generic hardcoded defaults.
+  freqaiConfig  Json    @map("freqai_config")
   pairWhitelist String  @map("pair_whitelist") // comma-separated pairs, e.g. "BTC/USDT,ETH/USDT"
   stakeAmount   Float   @map("stake_amount")
   isPaperTrading Boolean @default(true) @map("is_paper_trading")

@@ -4,6 +4,7 @@ import { decrypt } from "@/lib/encryption";
 import { buildFreqAITrainingCloudInit, createHetznerServer } from "@/lib/hetzner";
 import { generateCallbackToken, hashCallbackToken } from "@/lib/training-token";
 import { stopBot, forceExitAll } from "@/lib/freqtrade-client";
+import type { FreqAIProfileConfig } from "@/lib/strategy-presets";
 
 type BotRow = Prisma.BotConfigurationGetPayload<object>;
 
@@ -80,6 +81,7 @@ export async function startCloudTrainingJob({ bot, cancelOpenOrders = false }: S
       exchangeName: bot.exchangeName,
       strategy: bot.strategy,
       strategyCode: bot.strategyCode,
+      freqaiConfig: bot.freqaiConfig as unknown as FreqAIProfileConfig,
       pairWhitelist: bot.pairWhitelist.split(",").map((p) => p.trim()).filter(Boolean),
       uploadUrlEndpoint: `${appUrl}/api/train/cloud/upload-url`,
       callbackUrl: `${appUrl}/api/train/cloud/callback`,

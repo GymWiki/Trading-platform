@@ -6,6 +6,7 @@ import { decrypt, encrypt } from "@/lib/encryption";
 import { buildFreqtradeCloudInit, createHetznerServer, deleteHetznerServer } from "@/lib/hetzner";
 import { botSelect, toBotDTO } from "@/lib/bot-select";
 import { generateCallbackToken, hashCallbackToken } from "@/lib/training-token";
+import type { FreqAIProfileConfig } from "@/lib/strategy-presets";
 
 type BotRow = Prisma.BotConfigurationGetPayload<object>;
 
@@ -54,6 +55,7 @@ export async function deployBotToVps({ bot, supabase }: DeployBotParams) {
     exchangeApiSecret: decrypt(bot.exchangeApiSecret),
     strategy: bot.strategy,
     strategyCode: bot.strategyCode,
+    freqaiConfig: bot.freqaiConfig as unknown as FreqAIProfileConfig,
     pairWhitelist: bot.pairWhitelist.split(",").map((p) => p.trim()).filter(Boolean),
     stakeAmount: bot.stakeAmount,
     isPaperTrading: bot.isPaperTrading,

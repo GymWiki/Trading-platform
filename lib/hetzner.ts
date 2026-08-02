@@ -1,4 +1,5 @@
 import { isSafePythonIdentifier } from "@/lib/strategy-validation";
+import type { FreqAIProfileConfig } from "@/lib/strategy-presets";
 
 const HETZNER_API_BASE = "https://api.hetzner.cloud/v1";
 
@@ -163,6 +164,8 @@ interface CloudInitParams {
   exchangeApiSecret: string;
   strategy: string;
   strategyCode: string;
+  /** Every bot runs FreqAI — this drives the generated freqai config.json block (see lib/strategy-presets.ts). */
+  freqaiConfig: FreqAIProfileConfig;
   pairWhitelist: string[];
   stakeAmount: number;
   isPaperTrading: boolean;
@@ -192,6 +195,7 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
     exchangeApiSecret,
     strategy,
     strategyCode,
+    freqaiConfig,
     pairWhitelist,
     stakeAmount,
     isPaperTrading,
@@ -225,10 +229,27 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
     },
     pairlists: [{ method: "StaticPairList" }],
     strategy,
+    // Every bot runs FreqAI — freqaimodel is a top-level config key (also
+    // settable via --freqaimodel on the CLI, which the training pipeline
+    // uses instead; here the strategy is started via `trade`, so it has to
+    // go in config.json).
+    freqaimodel: freqaiConfig.freqaiModel,
+    ...(freqaiConfig.positionAdjustment?.enabled && {
+      position_adjustment_enable: true,
+      max_entry_position_adjustment: freqaiConfig.positionAdjustment.maxEntryPositionAdjustment,
+    }),
     freqai: aiModelDownloadUrl
       ? {
           enabled: true,
           identifier: `${safeBotName}-model`,
+          train_period_days: freqaiConfig.training.trainPeriodDays,
+          backtest_period_days: freqaiConfig.training.backtestPeriodDays,
+          live_retrain_hours: freqaiConfig.training.liveRetrainHours,
+          feature_parameters: {
+            include_timeframes: freqaiConfig.features.includeTimeframes,
+            indicator_periods_candles: freqaiConfig.features.indicatorPeriods,
+          },
+          data_split_parameters: { test_size: 0.25 },
         }
       : undefined,
     api_server: {
@@ -300,6 +321,8 @@ interface TrainingCloudInitParams {
   exchangeName: string;
   strategy: string;
   strategyCode: string;
+  /** Every bot runs FreqAI — drives the training window, feature set, and downloaded history range. */
+  freqaiConfig: FreqAIProfileConfig;
   pairWhitelist: string[];
   /**
    * GET endpoint (/api/train/cloud/upload-url) the VM calls right before
@@ -314,8 +337,7 @@ interface TrainingCloudInitParams {
   callbackToken: string;
   /** Needed so the VM can delete itself when done — see failsafe notes in lib/hetzner.ts callers. */
   hetznerApiToken: string;
-  freqaiModel?: string;
-  timeframe?: string;
+  /** How much historical data to download. Defaults to a multiple of the profile's own training window, so there's always enough history to actually fill it. */
   timerangeDays?: number;
   /** Hard ceiling on the whole run; a `timeout`-triggered kill still fires the self-destruct trap. */
   maxRuntimeHours?: number;
@@ -339,20 +361,22 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     exchangeName,
     strategy,
     strategyCode,
+    freqaiConfig,
     pairWhitelist,
     uploadUrlEndpoint,
     callbackUrl,
     callbackToken,
     hetznerApiToken,
-    freqaiModel = "LightGBMRegressor",
-    timeframe = "5m",
-    timerangeDays = 180,
+    // Needs enough history to fill the training window plus backtest window
+    // several times over, or FreqAI has nothing meaningful to train on.
+    timerangeDays = Math.max(90, (freqaiConfig.training.trainPeriodDays + freqaiConfig.training.backtestPeriodDays) * 4),
     maxRuntimeHours = 4,
   } = params;
 
   assertSafePythonIdentifier(strategy, "strategy");
 
   const safeBotName = botName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+  const timeframe = freqaiConfig.features.baseTimeframe;
 
   const today = new Date();
   const start = new Date(today.getTime() - timerangeDays * 24 * 60 * 60 * 1000);
@@ -374,12 +398,21 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
       pair_blacklist: [],
     },
     pairlists: [{ method: "StaticPairList" }],
+    freqaimodel: freqaiConfig.freqaiModel,
+    ...(freqaiConfig.positionAdjustment?.enabled && {
+      position_adjustment_enable: true,
+      max_entry_position_adjustment: freqaiConfig.positionAdjustment.maxEntryPositionAdjustment,
+    }),
     freqai: {
       enabled: true,
       identifier: `${safeBotName}-model`,
-      train_period_days: Math.min(30, Math.floor(timerangeDays / 2)),
-      backtest_period_days: 7,
-      feature_parameters: { include_timeframes: [timeframe] },
+      train_period_days: freqaiConfig.training.trainPeriodDays,
+      backtest_period_days: freqaiConfig.training.backtestPeriodDays,
+      live_retrain_hours: freqaiConfig.training.liveRetrainHours,
+      feature_parameters: {
+        include_timeframes: freqaiConfig.features.includeTimeframes,
+        indicator_periods_candles: freqaiConfig.features.indicatorPeriods,
+      },
       data_split_parameters: { test_size: 0.25 },
     },
   };
@@ -399,7 +432,7 @@ UPLOAD_URL_ENDPOINT="${shellEscapeDouble(uploadUrlEndpoint)}"
 CALLBACK_TOKEN="${shellEscapeDouble(callbackToken)}"
 HETZNER_API_TOKEN="${shellEscapeDouble(hetznerApiToken)}"
 STRATEGY="${shellEscapeDouble(strategy)}"
-FREQAI_MODEL="${shellEscapeDouble(freqaiModel)}"
+FREQAI_MODEL="${shellEscapeDouble(freqaiConfig.freqaiModel)}"
 TIMERANGE="${shellEscapeDouble(timerange)}"
 
 REPORTED=0

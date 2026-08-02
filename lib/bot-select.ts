@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import type { BotConfigurationDTO } from "@/lib/types";
+import type { FreqAIProfileConfig } from "@/lib/strategy-presets";
 
 // Shared Prisma `select` for every route/page that returns a bot to the
 // client, so the DTO shape (including the latest training job) stays
@@ -11,6 +12,7 @@ export const botSelect = {
   exchangeName: true,
   strategy: true,
   strategyCode: true,
+  freqaiConfig: true,
   pairWhitelist: true,
   stakeAmount: true,
   isPaperTrading: true,
@@ -38,8 +40,15 @@ export const botSelect = {
 type BotWithTrainingJobs = Prisma.BotConfigurationGetPayload<{ select: typeof botSelect }>;
 
 // Flattens the `trainingJobs: [latest]` array (from `take: 1`) into a
-// single `latestTrainingJob` field for the client-facing DTO.
+// single `latestTrainingJob` field for the client-facing DTO. freqaiConfig
+// is stored as Prisma's broad JsonValue — cast to the specific shape here,
+// at the one place raw DB rows become the app-wide DTO, rather than at
+// every call site.
 export function toBotDTO(bot: BotWithTrainingJobs): BotConfigurationDTO {
-  const { trainingJobs, ...rest } = bot;
-  return { ...rest, latestTrainingJob: trainingJobs[0] ?? null };
+  const { trainingJobs, freqaiConfig, ...rest } = bot;
+  return {
+    ...rest,
+    freqaiConfig: freqaiConfig as unknown as FreqAIProfileConfig,
+    latestTrainingJob: trainingJobs[0] ?? null,
+  };
 }

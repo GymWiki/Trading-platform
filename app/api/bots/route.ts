@@ -6,6 +6,7 @@ import { botSelect, toBotDTO } from "@/lib/bot-select";
 import {
   isSafePythonIdentifier,
   strategyCodeDefinesClass,
+  isValidFreqAIConfig,
   MAX_STRATEGY_CODE_LENGTH,
 } from "@/lib/strategy-validation";
 
@@ -44,6 +45,7 @@ export async function POST(req: NextRequest) {
     exchangeApiSecret,
     strategy,
     strategyCode,
+    freqaiConfig,
     pairWhitelist,
     stakeAmount,
     isPaperTrading,
@@ -56,10 +58,18 @@ export async function POST(req: NextRequest) {
     !exchangeApiSecret ||
     !strategy ||
     !strategyCode ||
+    !freqaiConfig ||
     !pairWhitelist ||
     typeof stakeAmount !== "number"
   ) {
     return NextResponse.json({ error: "Missing required bot configuration fields" }, { status: 400 });
+  }
+
+  // Every bot runs on FreqAI — this is the training/feature/risk config for
+  // the chosen AI behavior (see lib/strategy-presets.ts), not optional
+  // metadata. lib/hetzner.ts trusts its shape when generating config.json.
+  if (!isValidFreqAIConfig(freqaiConfig)) {
+    return NextResponse.json({ error: "freqaiConfig is missing required fields" }, { status: 400 });
   }
 
   // `strategy` becomes both a Python class name and a filename
@@ -94,6 +104,7 @@ export async function POST(req: NextRequest) {
       exchangeApiSecret: encrypt(exchangeApiSecret),
       strategy,
       strategyCode,
+      freqaiConfig,
       pairWhitelist,
       stakeAmount,
       isPaperTrading: isPaperTrading ?? true,

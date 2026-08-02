@@ -17,3 +17,68 @@ export function isSafePythonIdentifier(value: string): boolean {
 export function strategyCodeDefinesClass(code: string, className: string): boolean {
   return new RegExp(`class\\s+${className}\\b`).test(code);
 }
+
+// Structural check for the FreqAIProfileConfig JSON blob (see
+// lib/strategy-presets.ts) — every bot carries one, and lib/hetzner.ts
+// trusts its shape when building the freqai config.json block, so malformed
+// input needs to be rejected here rather than surface as a cryptic
+// cloud-init failure later.
+export function isValidFreqAIConfig(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const config = value as Record<string, unknown>;
+
+  if (typeof config.freqaiModel !== "string" || !config.freqaiModel) return false;
+
+  const training = config.training as Record<string, unknown> | undefined;
+  if (
+    typeof training !== "object" ||
+    training === null ||
+    typeof training.trainPeriodDays !== "number" ||
+    typeof training.backtestPeriodDays !== "number" ||
+    typeof training.liveRetrainHours !== "number"
+  ) {
+    return false;
+  }
+
+  const features = config.features as Record<string, unknown> | undefined;
+  if (
+    typeof features !== "object" ||
+    features === null ||
+    typeof features.baseTimeframe !== "string" ||
+    !features.baseTimeframe ||
+    !Array.isArray(features.indicatorPeriods) ||
+    !features.indicatorPeriods.every((p) => typeof p === "number") ||
+    !Array.isArray(features.includeTimeframes) ||
+    !features.includeTimeframes.every((t) => typeof t === "string") ||
+    typeof features.labelPeriodCandles !== "number"
+  ) {
+    return false;
+  }
+
+  const risk = config.risk as Record<string, unknown> | undefined;
+  if (
+    typeof risk !== "object" ||
+    risk === null ||
+    typeof risk.stoploss !== "number" ||
+    typeof risk.minimalRoi !== "object" ||
+    risk.minimalRoi === null ||
+    typeof risk.trailingStop !== "boolean"
+  ) {
+    return false;
+  }
+
+  if (config.positionAdjustment !== undefined) {
+    const pa = config.positionAdjustment as Record<string, unknown>;
+    if (
+      typeof pa !== "object" ||
+      pa === null ||
+      typeof pa.enabled !== "boolean" ||
+      typeof pa.maxEntryPositionAdjustment !== "number" ||
+      typeof pa.rebuyTriggerPercent !== "number"
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}

@@ -56,6 +56,7 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
           exchangeApiSecret: form.exchangeApiSecret,
           strategy: selectedStrategy.className,
           strategyCode: selectedStrategy.code,
+          freqaiConfig: selectedStrategy.freqaiConfig,
           pairWhitelist: form.pairs.join(","),
           stakeAmount: form.stakeAmount,
           isPaperTrading: true,
@@ -91,8 +92,10 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
       <div className="card-surface flex max-h-[90vh] w-full max-w-lg flex-col p-6">
         <div className="mb-4 flex shrink-0 items-center justify-between">
           <div>
-            <h2 className="font-semibold">Nieuwe bot instellen</h2>
-            <p className="text-xs text-slate-400">Geen technische kennis nodig — kies gewoon je voorkeuren.</p>
+            <h2 className="font-semibold">Nieuwe AI-bot instellen</h2>
+            <p className="text-xs text-slate-400">
+              Elke bot handelt met FreqAI. Geen technische kennis nodig — kies gewoon het AI-gedrag dat bij je past.
+            </p>
           </div>
           <button type="button" onClick={() => setOpen(false)} className="text-slate-400 hover:text-white">
             <X className="h-4 w-4" />
@@ -150,7 +153,7 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
               />
             </Field>
 
-            <FieldGroup label="Strategie">
+            <FieldGroup label="AI-gedrag">
               <StrategyPicker
                 selectedId={form.strategyId}
                 onSelect={(preset) => setForm({ ...form, strategyId: preset.id })}

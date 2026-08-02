@@ -1,3 +1,5 @@
+import type { FreqAIProfileConfig } from "@/lib/strategy-presets";
+
 export type DeploymentStatus = "LOCAL" | "VPS_ACTIVE" | "INACTIVE";
 export type TrainingMode = "LOCAL" | "CLOUD";
 export type TrainingStatus = "QUEUED" | "TRAINING" | "COMPLETED" | "FAILED";
@@ -17,6 +19,7 @@ export interface BotConfigurationDTO {
   exchangeName: string;
   strategy: string;
   strategyCode: string;
+  freqaiConfig: FreqAIProfileConfig;
   pairWhitelist: string;
   stakeAmount: number;
   isPaperTrading: boolean;
