@@ -61,7 +61,7 @@ export function PlatformCard({ platform, onRefresh, onDelete }: PlatformCardProp
           type="button"
           onClick={handleDelete}
           disabled={isDeleting}
-          className="shrink-0 rounded-md p-1.5 text-slate-500 transition hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-slate-500 transition hover:bg-red-500/10 hover:text-red-400 disabled:opacity-50"
           title="Platform loskoppelen"
         >
           {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
@@ -75,7 +75,7 @@ export function PlatformCard({ platform, onRefresh, onDelete }: PlatformCardProp
             type="button"
             onClick={handleRefresh}
             disabled={isRefreshing}
-            className="flex items-center gap-1 text-[11px] text-slate-500 transition hover:text-primary disabled:opacity-50"
+            className="-mr-1.5 flex min-h-[36px] items-center gap-1 rounded-md px-2 text-[11px] text-slate-500 transition hover:text-primary disabled:opacity-50"
           >
             <RefreshCw className={`h-3 w-3 ${isRefreshing ? "animate-spin" : ""}`} />
             Ververs

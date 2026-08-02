@@ -1,0 +1,48 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { Bot, Link2, Settings } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+const TABS = [
+  { href: "/dashboard", label: "Bots", icon: Bot },
+  { href: "/platforms", label: "Platformen", icon: Link2 },
+  { href: "/settings", label: "Instellingen", icon: Settings },
+] as const;
+
+// The mobile alternative to a sidebar (per the design brief: no complex
+// sidebars on small screens) — fixed to the viewport bottom, thumb reach
+// on any phone size. Desktop keeps Navbar's inline text links instead
+// (this is md:hidden); only rendered at all when Navbar already confirmed
+// an authenticated session, so no separate auth check here.
+export function BottomNav() {
+  const pathname = usePathname();
+
+  return (
+    <nav
+      className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 backdrop-blur md:hidden"
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+    >
+      <div className="mx-auto flex max-w-6xl items-stretch justify-around">
+        {TABS.map(({ href, label, icon: Icon }) => {
+          const isActive = pathname === href || pathname.startsWith(`${href}/`);
+          return (
+            <Link
+              key={href}
+              href={href}
+              className={cn(
+                "flex min-w-[64px] flex-1 flex-col items-center gap-0.5 py-2.5 text-[11px] font-medium transition",
+                isActive ? "text-primary" : "text-slate-500",
+              )}
+              aria-current={isActive ? "page" : undefined}
+            >
+              <Icon className="h-5 w-5" />
+              {label}
+            </Link>
+          );
+        })}
+      </div>
+    </nav>
+  );
+}

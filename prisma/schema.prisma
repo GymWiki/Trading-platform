@@ -42,10 +42,23 @@ model Profile {
   @@map("profiles")
 }
 
+// @@map matches the real Postgres type name (see the sleep-sweep/panic
+// migration history — these types were created directly via raw SQL
+// through the Supabase MCP, snake_case per Postgres convention, never via
+// `prisma migrate`/`db push`). Without it Prisma queries for a literally
+// nonexistent type named "DeploymentStatus" (its own default naming,
+// exactly matching the enum block name) instead of the real
+// "deployment_status" — this was a real, previously-undetected bug: it
+// broke every query touching this column in production (42704 "type does
+// not exist"), including /platforms, /dashboard, and /settings, while
+// `tsc`/`next build` stayed clean since neither ever executes a query
+// against the live database.
 enum DeploymentStatus {
   LOCAL
   VPS_ACTIVE
   INACTIVE
+
+  @@map("deployment_status")
 }
 
 // How the user currently wants to train this bot's FreqAI model. Purely a
@@ -53,6 +66,8 @@ enum DeploymentStatus {
 enum TrainingMode {
   LOCAL
   CLOUD
+
+  @@map("training_mode")
 }
 
 enum TrainingStatus {
@@ -60,6 +75,8 @@ enum TrainingStatus {
   TRAINING
   COMPLETED
   FAILED
+
+  @@map("training_status")
 }
 
 // Operational lifecycle of the bot itself — distinct from TrainingStatus,
@@ -104,6 +121,8 @@ enum BotStatus {
   ERROR
   PAUSED_EMERGENCY
   SLEEPING
+
+  @@map("bot_status")
 }
 
 // A user's linked exchange account — added credentials once, reused by any

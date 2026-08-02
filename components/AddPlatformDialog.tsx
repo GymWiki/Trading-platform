@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState, type FormEvent } from "react";
-import { Loader2, Plus, X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { ExchangeCombobox } from "@/components/ui/ExchangeCombobox";
 import { InfoTooltip } from "@/components/ui/Tooltip";
 import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
@@ -11,16 +11,20 @@ import { apiFetch, toErrorMessage } from "@/lib/api-client";
 interface AddPlatformDialogProps {
   connectedExchangeIds: string[];
   onAdded: (platform: PlatformWithBalance) => void;
+  onClose: () => void;
 }
 
 const EMPTY_FORM = { exchangeName: EXCHANGE_PRESETS[0].id, apiKey: "", apiSecret: "" };
 
+// Controlled by the parent (like GoLiveModal) rather than owning its own
+// trigger — PlatformsGrid renders two different triggers for this same
+// modal (an inline desktop button, a mobile FAB), so the open/closed state
+// has to live one level up instead of being private to this component.
 // Mirrors NewBotDialog's modal shell/Field-FieldGroup pattern (see that
 // file for why composite widgets use a group + aria-labelledby instead of
 // a native <label>) so adding a platform feels like the same product as
 // adding a bot, not a bolted-on admin screen.
-export function AddPlatformDialog({ connectedExchangeIds, onAdded }: AddPlatformDialogProps) {
-  const [open, setOpen] = useState(false);
+export function AddPlatformDialog({ connectedExchangeIds, onAdded, onClose }: AddPlatformDialogProps) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,25 +51,12 @@ export function AddPlatformDialog({ connectedExchangeIds, onAdded }: AddPlatform
       });
       onAdded(data.platform);
       setForm(EMPTY_FORM);
-      setOpen(false);
+      onClose();
     } catch (err) {
       setError(toErrorMessage(err, "Failed to add platform"));
     } finally {
       setIsSubmitting(false);
     }
-  }
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-background transition hover:bg-primary-hover"
-      >
-        <Plus className="h-4 w-4" />
-        Platform koppelen
-      </button>
-    );
   }
 
   return (
@@ -76,7 +67,11 @@ export function AddPlatformDialog({ connectedExchangeIds, onAdded }: AddPlatform
             <h2 className="font-semibold">Platform koppelen</h2>
             <p className="text-xs text-slate-400">Eén keer koppelen — elke bot kan dit account daarna gebruiken.</p>
           </div>
-          <button type="button" onClick={() => setOpen(false)} className="text-slate-400 hover:text-white">
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 shrink-0 items-center justify-center text-slate-400 hover:text-white"
+          >
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -146,7 +141,7 @@ export function AddPlatformDialog({ connectedExchangeIds, onAdded }: AddPlatform
           <button
             type="submit"
             disabled={isSubmitting || alreadyConnected}
-            className="mt-4 flex w-full shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-background transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+            className="mt-4 flex w-full shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-semibold text-background transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
             Platform koppelen

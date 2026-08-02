@@ -26,7 +26,7 @@ export default async function SettingsPage() {
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
-      <main className="mx-auto max-w-2xl px-6 py-10">
+      <main className="mx-auto max-w-2xl px-4 pb-24 pt-6 sm:px-6 sm:py-10 md:pb-10">
         <div className="mb-8">
           <h1 className="text-2xl font-bold tracking-tight">Instellingen</h1>
           <p className="mt-1 text-sm text-slate-400">Accountbreed — geldt voor elke bot die je (her)deployt.</p>
