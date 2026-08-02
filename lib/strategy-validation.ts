@@ -50,7 +50,8 @@ export function isValidFreqAIConfig(value: unknown): boolean {
     !features.indicatorPeriods.every((p) => typeof p === "number") ||
     !Array.isArray(features.includeTimeframes) ||
     !features.includeTimeframes.every((t) => typeof t === "string") ||
-    typeof features.labelPeriodCandles !== "number"
+    typeof features.labelPeriodCandles !== "number" ||
+    typeof features.startupCandleCount !== "number"
   ) {
     return false;
   }

@@ -22,6 +22,19 @@ export interface FreqAIFeatureConfig {
   includeTimeframes: string[];
   /** How many candles ahead set_freqai_targets looks when building the label. */
   labelPeriodCandles: number;
+  /**
+   * Minimum warm-up candles freqtrade must have available before the
+   * strategy's own indicators (and FreqAI's feature engineering, which
+   * uses the same indicatorPeriods lookbacks) are considered valid —
+   * mirrored into the `startup_candle_count` class attribute in `code`.
+   * Too low and the first predictions after a (re)start are computed on
+   * partially-NaN features — a real source of spurious, overfit-looking
+   * signals independent of anything FreqAI itself learned. Set generously
+   * above the largest indicatorPeriods entry, regardless of timeframe —
+   * lib/hetzner.ts also folds this into how many days of history a
+   * training run downloads (see buildFreqAITrainingCloudInit).
+   */
+  startupCandleCount: number;
 }
 
 export interface FreqAITrainingConfig {
@@ -67,11 +80,14 @@ export interface StrategyPreset {
   freqaiConfig: FreqAIProfileConfig;
 }
 
-const SMART_SCALPER_CODE = `from datetime import datetime
+const SMART_SCALPER_CODE = `import logging
+from datetime import datetime
 from typing import Optional
 
 from freqtrade.strategy import IStrategy
 import talib.abstract as ta
+
+logger = logging.getLogger(__name__)
 
 
 class FreqaiScalperStrategy(IStrategy):
@@ -87,10 +103,56 @@ class FreqaiScalperStrategy(IStrategy):
     trailing_only_offset_is_reached = True
     process_only_new_candles = True
 
+    # Generous warm-up so every indicator/feature is fully computed (no
+    # partial-NaN lookback window) before the first real prediction —
+    # must stay in sync with freqaiConfig.features.startupCandleCount in
+    # lib/strategy-presets.ts, which lib/hetzner.ts also uses to size how
+    # much history a training run downloads.
+    startup_candle_count = 200
+
     # Point at which abs(&-target) is treated as maximum directional
     # conviction in custom_stake_amount below — roughly 2.5x the entry
     # threshold this strategy already enters on.
     stake_confidence_scale = 0.01
+
+    def bot_start(self, **kwargs) -> None:
+        """FreqAI's minimal_roi/trailing_stop values are risk parameters
+        chosen without knowing which exchange the user will pick. On a
+        higher-fee exchange, a scalping-tuned profit target can sit below
+        the round-trip cost of just entering and exiting a trade, turning
+        a "winning" trade into a net loss after fees. Runs once at
+        startup: raises (never lowers) any positive ROI tier and the
+        trailing-stop trigger up to a safe margin above round-trip fees
+        for the exchange in config.json's "fee" (see lib/hetzner.ts)."""
+        fee_pct = self.config.get("fee")
+        if fee_pct is None:
+            return  # freqtrade will fetch the real fee live — nothing static to enforce yet
+
+        round_trip_fee = fee_pct * 2  # one entry + one exit
+        min_safe_roi = round_trip_fee * 1.5  # + 50% margin so a "won" trade nets a real profit
+
+        adjusted_roi = {}
+        roi_changed = False
+        for minutes, roi in self.minimal_roi.items():
+            if roi > 0 and roi < min_safe_roi:
+                adjusted_roi[minutes] = min_safe_roi
+                roi_changed = True
+            else:
+                adjusted_roi[minutes] = roi
+        if roi_changed:
+            self.minimal_roi = dict(sorted(adjusted_roi.items(), key=lambda kv: int(kv[0])))
+            logger.warning(
+                "minimal_roi tier(s) raised to %.4f to stay above round-trip fees (%.4f)",
+                min_safe_roi, round_trip_fee,
+            )
+
+        if self.trailing_stop and self.trailing_stop_positive is not None \\
+                and self.trailing_stop_positive < min_safe_roi:
+            logger.warning(
+                "trailing_stop_positive raised from %.4f to %.4f to stay above round-trip fees",
+                self.trailing_stop_positive, min_safe_roi,
+            )
+            self.trailing_stop_positive = min_safe_roi
 
     def feature_engineering_expand_all(self, dataframe, period, metadata, **kwargs):
         dataframe["%-rsi"] = ta.RSI(dataframe, timeperiod=period)
@@ -174,11 +236,14 @@ class FreqaiScalperStrategy(IStrategy):
         return stake
 `;
 
-const DYNAMIC_DCA_CODE = `from datetime import datetime
+const DYNAMIC_DCA_CODE = `import logging
+from datetime import datetime
 from typing import Optional
 
 from freqtrade.strategy import IStrategy
 import talib.abstract as ta
+
+logger = logging.getLogger(__name__)
 
 
 class FreqaiDcaStrategy(IStrategy):
@@ -196,9 +261,47 @@ class FreqaiDcaStrategy(IStrategy):
     position_adjustment_enable = True
     max_entry_position_adjustment = 3
 
+    # Generous warm-up so every indicator/feature is fully computed (no
+    # partial-NaN lookback window) before the first real prediction —
+    # must stay in sync with freqaiConfig.features.startupCandleCount in
+    # lib/strategy-presets.ts, which lib/hetzner.ts also uses to size how
+    # much history a training run downloads.
+    startup_candle_count = 250
+
     # Point at which abs(&-target) is treated as maximum directional
     # conviction in custom_stake_amount below.
     stake_confidence_scale = 0.03
+
+    def bot_start(self, **kwargs) -> None:
+        """FreqAI's minimal_roi values are risk parameters chosen without
+        knowing which exchange the user will pick. On a higher-fee
+        exchange, a profit target can sit below the round-trip cost of
+        just entering and exiting a trade, turning a "winning" trade into
+        a net loss after fees. Runs once at startup: raises (never
+        lowers) any positive ROI tier up to a safe margin above
+        round-trip fees for the exchange in config.json's "fee" (see
+        lib/hetzner.ts)."""
+        fee_pct = self.config.get("fee")
+        if fee_pct is None:
+            return  # freqtrade will fetch the real fee live — nothing static to enforce yet
+
+        round_trip_fee = fee_pct * 2  # one entry + one exit
+        min_safe_roi = round_trip_fee * 1.5  # + 50% margin so a "won" trade nets a real profit
+
+        adjusted_roi = {}
+        roi_changed = False
+        for minutes, roi in self.minimal_roi.items():
+            if roi > 0 and roi < min_safe_roi:
+                adjusted_roi[minutes] = min_safe_roi
+                roi_changed = True
+            else:
+                adjusted_roi[minutes] = roi
+        if roi_changed:
+            self.minimal_roi = dict(sorted(adjusted_roi.items(), key=lambda kv: int(kv[0])))
+            logger.warning(
+                "minimal_roi tier(s) raised to %.4f to stay above round-trip fees (%.4f)",
+                min_safe_roi, round_trip_fee,
+            )
 
     def feature_engineering_expand_all(self, dataframe, period, metadata, **kwargs):
         dataframe["%-rsi"] = ta.RSI(dataframe, timeperiod=period)
@@ -300,11 +403,14 @@ class FreqaiDcaStrategy(IStrategy):
         return stake
 `;
 
-const TREND_CATCHER_CODE = `from datetime import datetime
+const TREND_CATCHER_CODE = `import logging
+from datetime import datetime
 from typing import Optional
 
 from freqtrade.strategy import IStrategy
 import talib.abstract as ta
+
+logger = logging.getLogger(__name__)
 
 
 class FreqaiTrendCatcherStrategy(IStrategy):
@@ -320,9 +426,55 @@ class FreqaiTrendCatcherStrategy(IStrategy):
     trailing_only_offset_is_reached = True
     process_only_new_candles = True
 
+    # Generous warm-up so every indicator/feature is fully computed (no
+    # partial-NaN lookback window) before the first real prediction —
+    # must stay in sync with freqaiConfig.features.startupCandleCount in
+    # lib/strategy-presets.ts, which lib/hetzner.ts also uses to size how
+    # much history a training run downloads.
+    startup_candle_count = 500
+
     # Point at which abs(&-target) is treated as maximum directional
     # conviction in custom_stake_amount below.
     stake_confidence_scale = 0.08
+
+    def bot_start(self, **kwargs) -> None:
+        """FreqAI's minimal_roi/trailing_stop values are risk parameters
+        chosen without knowing which exchange the user will pick. On a
+        higher-fee exchange, a profit target can sit below the round-trip
+        cost of just entering and exiting a trade, turning a "winning"
+        trade into a net loss after fees. Runs once at startup: raises
+        (never lowers) any positive ROI tier and the trailing-stop
+        trigger up to a safe margin above round-trip fees for the
+        exchange in config.json's "fee" (see lib/hetzner.ts)."""
+        fee_pct = self.config.get("fee")
+        if fee_pct is None:
+            return  # freqtrade will fetch the real fee live — nothing static to enforce yet
+
+        round_trip_fee = fee_pct * 2  # one entry + one exit
+        min_safe_roi = round_trip_fee * 1.5  # + 50% margin so a "won" trade nets a real profit
+
+        adjusted_roi = {}
+        roi_changed = False
+        for minutes, roi in self.minimal_roi.items():
+            if roi > 0 and roi < min_safe_roi:
+                adjusted_roi[minutes] = min_safe_roi
+                roi_changed = True
+            else:
+                adjusted_roi[minutes] = roi
+        if roi_changed:
+            self.minimal_roi = dict(sorted(adjusted_roi.items(), key=lambda kv: int(kv[0])))
+            logger.warning(
+                "minimal_roi tier(s) raised to %.4f to stay above round-trip fees (%.4f)",
+                min_safe_roi, round_trip_fee,
+            )
+
+        if self.trailing_stop and self.trailing_stop_positive is not None \\
+                and self.trailing_stop_positive < min_safe_roi:
+            logger.warning(
+                "trailing_stop_positive raised from %.4f to %.4f to stay above round-trip fees",
+                self.trailing_stop_positive, min_safe_roi,
+            )
+            self.trailing_stop_positive = min_safe_roi
 
     def feature_engineering_expand_all(self, dataframe, period, metadata, **kwargs):
         dataframe["%-ema"] = ta.EMA(dataframe, timeperiod=period)
@@ -419,6 +571,7 @@ export const STRATEGY_PRESETS: StrategyPreset[] = [
         indicatorPeriods: [5, 10, 20],
         includeTimeframes: ["5m", "15m"],
         labelPeriodCandles: 6,
+        startupCandleCount: 200,
       },
       risk: {
         stoploss: -0.02,
@@ -446,6 +599,7 @@ export const STRATEGY_PRESETS: StrategyPreset[] = [
         indicatorPeriods: [10, 20, 50],
         includeTimeframes: ["15m", "1h"],
         labelPeriodCandles: 12,
+        startupCandleCount: 250,
       },
       risk: { stoploss: -0.15, minimalRoi: { "0": 0.04, "60": 0.02, "180": 0 }, trailingStop: false },
       positionAdjustment: { enabled: true, maxEntryPositionAdjustment: 3, rebuyTriggerPercent: 0.03 },
@@ -468,6 +622,7 @@ export const STRATEGY_PRESETS: StrategyPreset[] = [
         indicatorPeriods: [20, 50, 100],
         includeTimeframes: ["1h", "4h"],
         labelPeriodCandles: 24,
+        startupCandleCount: 500,
       },
       risk: {
         stoploss: -0.12,

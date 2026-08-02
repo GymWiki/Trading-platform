@@ -127,6 +127,11 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
                 onChange={(exchangeName) => setForm({ ...form, exchangeName })}
                 aria-label="Exchange"
               />
+              {selectedExchange && (
+                <p className="mt-2 rounded-lg bg-background px-3 py-2 text-[11px] leading-relaxed text-slate-400">
+                  {selectedExchange.feeNote}
+                </p>
+              )}
             </FieldGroup>
 
             <Field

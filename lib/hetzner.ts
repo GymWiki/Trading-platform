@@ -1,5 +1,6 @@
 import { isSafePythonIdentifier } from "@/lib/strategy-validation";
 import type { FreqAIProfileConfig } from "@/lib/strategy-presets";
+import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 
 const HETZNER_API_BASE = "https://api.hetzner.cloud/v1";
 
@@ -164,6 +165,38 @@ const STAKE_CURRENCY = "USDT";
 // single training run stays bounded.
 const AUTO_PAIRLIST_SIZE = 30;
 
+// The taker fee freqtrade uses to simulate costs during backtesting/
+// dry-run (config's top-level "fee" key — see EXCHANGE_PRESETS for the
+// per-exchange source data). Falls back to a conservative 0.1% if the
+// exchange somehow isn't in our list — app/api/bots/route.ts already
+// rejects that at creation time, so this is defense in depth, not the
+// primary guard.
+function lookupExchangeFee(exchangeName: string): number {
+  return EXCHANGE_PRESETS.find((e) => e.id === exchangeName)?.takerFee ?? 0.001;
+}
+
+const TIMEFRAME_MINUTES: Record<string, number> = {
+  "1m": 1,
+  "3m": 3,
+  "5m": 5,
+  "15m": 15,
+  "30m": 30,
+  "1h": 60,
+  "2h": 120,
+  "4h": 240,
+  "6h": 360,
+  "8h": 480,
+  "12h": 720,
+  "1d": 1440,
+};
+
+// Falls back to 60 (1h) for a timeframe we don't recognize — a
+// conservative middle ground that neither wildly over- nor
+// under-estimates a download-range buffer.
+function timeframeToMinutes(timeframe: string): number {
+  return TIMEFRAME_MINUTES[timeframe] ?? 60;
+}
+
 interface PairlistConfig {
   pair_whitelist: string[];
   pairlists: Array<Record<string, unknown>>;
@@ -272,6 +305,13 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
     // custom_user_settings below — a fixed config.json number can't scale
     // with FreqAI's own per-trade confidence the way that function does.
     stake_amount: "unlimited",
+    // Used by freqtrade to simulate trading costs in backtests and
+    // dry-run (real live trades read the exchange's actual fill fees
+    // instead) — without this, dry-run defaults to a generic ~0.25% that
+    // may not match the exchange the user actually picked, understating
+    // or overstating how much a scalping strategy's paper P&L would
+    // really keep after costs.
+    fee: lookupExchangeFee(exchangeName),
     dry_run: isPaperTrading,
     dry_run_wallet: totalBudget,
     cancel_open_orders_on_exit: false,
@@ -441,8 +481,25 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     callbackToken,
     hetznerApiToken,
     // Needs enough history to fill the training window plus backtest window
-    // several times over, or FreqAI has nothing meaningful to train on.
-    timerangeDays = Math.max(90, (freqaiConfig.training.trainPeriodDays + freqaiConfig.training.backtestPeriodDays) * 4),
+    // several times over, or FreqAI has nothing meaningful to train on —
+    // AND, regardless of which timeframe the preset uses, enough extra at
+    // the very front of the range for every indicator/feature to be fully
+    // warmed up (startupCandleCount candles' worth, converted to real days
+    // via the base timeframe) before FreqAI's own window even starts.
+    // Insufficient warm-up produces partial-NaN features on the earliest
+    // candles — a real source of spurious training noise, independent of
+    // anything FreqAI itself learned, i.e. exactly what generously
+    // over-provisioning history here is meant to rule out.
+    timerangeDays = Math.max(
+      90,
+      (freqaiConfig.training.trainPeriodDays + freqaiConfig.training.backtestPeriodDays) * 4,
+      freqaiConfig.training.trainPeriodDays +
+        freqaiConfig.training.backtestPeriodDays +
+        Math.ceil(
+          (freqaiConfig.features.startupCandleCount * timeframeToMinutes(freqaiConfig.features.baseTimeframe)) /
+            (60 * 24),
+        ),
+    ),
     maxRuntimeHours = 4,
   } = params;
 
@@ -460,6 +517,10 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
   const trainingConfig = {
     stake_currency: STAKE_CURRENCY,
     stake_amount: "unlimited",
+    // Same fee simulation value as the live deploy — FreqAI training runs
+    // via `backtesting`, whose fee-aware profit/ROI numbers should reflect
+    // the exchange the bot will actually be deployed to.
+    fee: lookupExchangeFee(exchangeName),
     dry_run: true,
     dry_run_wallet: totalBudget,
     custom_user_settings: {
