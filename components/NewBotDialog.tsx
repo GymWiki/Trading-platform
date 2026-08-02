@@ -7,6 +7,7 @@ import { Select } from "@/components/ui/Select";
 import { InfoTooltip } from "@/components/ui/Tooltip";
 import { StrategyPicker } from "@/components/ui/StrategyPicker";
 import { PairSelector } from "@/components/ui/PairSelector";
+import { BudgetSlider } from "@/components/ui/BudgetSlider";
 import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import { STRATEGY_PRESETS, type StrategyPreset } from "@/lib/strategy-presets";
 
@@ -23,7 +24,8 @@ const EMPTY_FORM = {
   exchangeApiSecret: "",
   strategyId: DEFAULT_STRATEGY.id,
   pairs: ["BTC/USDT", "ETH/USDT"] as string[],
-  stakeAmount: 50,
+  totalBudget: 500,
+  maxStakePercentage: 20,
 };
 
 export function NewBotDialog({ onCreated }: NewBotDialogProps) {
@@ -58,7 +60,8 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
           strategyCode: selectedStrategy.code,
           freqaiConfig: selectedStrategy.freqaiConfig,
           pairWhitelist: form.pairs.join(","),
-          stakeAmount: form.stakeAmount,
+          totalBudget: form.totalBudget,
+          maxStakePercentage: form.maxStakePercentage,
           isPaperTrading: true,
         }),
       });
@@ -164,20 +167,17 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
               <PairSelector selected={form.pairs} onChange={(pairs) => setForm({ ...form, pairs })} />
             </FieldGroup>
 
-            <Field
-              label="Inzet per trade (USDT)"
-              tooltip="Het maximale bedrag in USDT dat deze bot per trade mag inzetten. Bij paper trading wordt hier niet écht mee gehandeld."
+            <FieldGroup
+              label="Totaal Bot Budget (USDT)"
+              tooltip="Het totale bedrag dat de bot mag gebruiken. Bij paper trading wordt hier niet écht mee gehandeld."
             >
-              <input
-                required
-                type="number"
-                min={1}
-                step="any"
-                value={form.stakeAmount}
-                onChange={(e) => setForm({ ...form, stakeAmount: Number(e.target.value) })}
-                className="input"
+              <BudgetSlider
+                totalBudget={form.totalBudget}
+                maxStakePercentage={form.maxStakePercentage}
+                onBudgetChange={(totalBudget) => setForm({ ...form, totalBudget })}
+                onPercentageChange={(maxStakePercentage) => setForm({ ...form, maxStakePercentage })}
               />
-            </Field>
+            </FieldGroup>
 
             {error && (
               <p role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">

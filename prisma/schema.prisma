@@ -94,7 +94,15 @@ model BotConfiguration {
   // training run, rather than from generic hardcoded defaults.
   freqaiConfig  Json    @map("freqai_config")
   pairWhitelist String  @map("pair_whitelist") // comma-separated pairs, e.g. "BTC/USDT,ETH/USDT"
-  stakeAmount   Float   @map("stake_amount")
+  // The total amount (in stake_currency) this bot is allowed to put to work
+  // across all its open trades. Freqtrade itself is told stake_amount is
+  // "unlimited" (see lib/hetzner.ts) — sizing per trade is real Python logic
+  // in custom_stake_amount, not a fixed number in config.json.
+  totalBudget        Float @map("total_budget")
+  // Hard ceiling, as a percentage of totalBudget, that custom_stake_amount
+  // is allowed to put into a single trade even at maximum FreqAI confidence.
+  // UI: a 10-100 slider defaulting to 20 (see components/ui/BudgetSlider.tsx).
+  maxStakePercentage Float @default(20) @map("max_stake_percentage")
   isPaperTrading Boolean @default(true) @map("is_paper_trading")
 
   deploymentStatus DeploymentStatus @default(LOCAL) @map("deployment_status")

@@ -83,6 +83,8 @@ export async function startCloudTrainingJob({ bot, cancelOpenOrders = false }: S
       strategyCode: bot.strategyCode,
       freqaiConfig: bot.freqaiConfig as unknown as FreqAIProfileConfig,
       pairWhitelist: bot.pairWhitelist.split(",").map((p) => p.trim()).filter(Boolean),
+      totalBudget: bot.totalBudget,
+      maxStakePercentage: bot.maxStakePercentage,
       uploadUrlEndpoint: `${appUrl}/api/train/cloud/upload-url`,
       callbackUrl: `${appUrl}/api/train/cloud/callback`,
       callbackToken,

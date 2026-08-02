@@ -47,7 +47,8 @@ export async function POST(req: NextRequest) {
     strategyCode,
     freqaiConfig,
     pairWhitelist,
-    stakeAmount,
+    totalBudget,
+    maxStakePercentage,
     isPaperTrading,
   } = body ?? {};
 
@@ -60,9 +61,20 @@ export async function POST(req: NextRequest) {
     !strategyCode ||
     !freqaiConfig ||
     !pairWhitelist ||
-    typeof stakeAmount !== "number"
+    typeof totalBudget !== "number" ||
+    typeof maxStakePercentage !== "number"
   ) {
     return NextResponse.json({ error: "Missing required bot configuration fields" }, { status: 400 });
+  }
+
+  if (!(totalBudget > 0)) {
+    return NextResponse.json({ error: "totalBudget must be a positive number" }, { status: 400 });
+  }
+  // Mirrors the UI slider's range (see components/ui/BudgetSlider.tsx) — the
+  // hard cap custom_stake_amount enforces in the deployed strategy code is
+  // only as trustworthy as the value we accept here.
+  if (maxStakePercentage < 10 || maxStakePercentage > 100) {
+    return NextResponse.json({ error: "maxStakePercentage must be between 10 and 100" }, { status: 400 });
   }
 
   // Every bot runs on FreqAI — this is the training/feature/risk config for
@@ -106,7 +118,8 @@ export async function POST(req: NextRequest) {
       strategyCode,
       freqaiConfig,
       pairWhitelist,
-      stakeAmount,
+      totalBudget,
+      maxStakePercentage,
       isPaperTrading: isPaperTrading ?? true,
       deploymentStatus: "LOCAL",
     },

@@ -67,7 +67,10 @@ export interface StrategyPreset {
   freqaiConfig: FreqAIProfileConfig;
 }
 
-const SMART_SCALPER_CODE = `from freqtrade.strategy import IStrategy
+const SMART_SCALPER_CODE = `from datetime import datetime
+from typing import Optional
+
+from freqtrade.strategy import IStrategy
 import talib.abstract as ta
 
 
@@ -83,6 +86,11 @@ class FreqaiScalperStrategy(IStrategy):
     trailing_stop_positive_offset = 0.006
     trailing_only_offset_is_reached = True
     process_only_new_candles = True
+
+    # Point at which abs(&-target) is treated as maximum directional
+    # conviction in custom_stake_amount below — roughly 2.5x the entry
+    # threshold this strategy already enters on.
+    stake_confidence_scale = 0.01
 
     def feature_engineering_expand_all(self, dataframe, period, metadata, **kwargs):
         dataframe["%-rsi"] = ta.RSI(dataframe, timeperiod=period)
@@ -119,15 +127,63 @@ class FreqaiScalperStrategy(IStrategy):
             "exit_long",
         ] = 1
         return dataframe
+
+    def custom_stake_amount(self, pair: str, current_time: datetime, current_rate: float,
+                             proposed_stake: float, min_stake: Optional[float], max_stake: float,
+                             leverage: float, entry_tag: Optional[str], side: str,
+                             **kwargs) -> float:
+        """Sizes the trade with how confident FreqAI is, never exceeding the
+        user's configured max_stake_pct of their total_budget (both come
+        from custom_user_settings in config.json — see lib/hetzner.ts).
+        stake_amount itself is "unlimited" in config.json; this function is
+        the real sizing logic."""
+        settings = self.config.get("custom_user_settings", {})
+        total_budget = float(settings.get("total_budget") or self.wallets.get_total_stake_amount() or proposed_stake)
+        max_stake_pct = float(settings.get("max_stake_pct", 20)) / 100
+
+        hard_cap = total_budget * max_stake_pct
+        floor = hard_cap * 0.25  # never risk less than a quarter of the user's own ceiling on a real signal
+
+        confidence = 0.5  # neutral fallback until FreqAI has produced a prediction for this candle
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair=pair, timeframe=self.timeframe)
+        if dataframe is not None and not dataframe.empty:
+            last_candle = dataframe.iloc[-1]
+
+            # Dissimilarity Index: how far this candle sits from the data
+            # FreqAI actually trained on. 0 = squarely in-distribution, 1 =
+            # at the DI_threshold cutoff FreqAI itself rejects outliers at.
+            di_value = last_candle.get("DI_values")
+            di_confidence = max(0.0, 1 - float(di_value)) if di_value is not None else 0.5
+
+            # Classifier FreqAI models expose a "<label>_prob" column with
+            # the model's own win probability (e.g. "up_prob"); our
+            # regression target doesn't, so fall back to how far the
+            # predicted move clears the entry threshold as a conviction proxy.
+            if "up_prob" in last_candle:
+                direction_confidence = float(last_candle["up_prob"])
+            else:
+                target = float(last_candle.get("&-target", 0))
+                direction_confidence = max(0.0, min(1.0, abs(target) / self.stake_confidence_scale))
+
+            confidence = max(0.0, min(1.0, (di_confidence + direction_confidence) / 2))
+
+        stake = floor + (hard_cap - floor) * confidence
+        stake = min(stake, hard_cap, max_stake)
+        if min_stake is not None:
+            stake = max(stake, min_stake)
+        return stake
 `;
 
-const DYNAMIC_DCA_CODE = `from freqtrade.strategy import IStrategy
+const DYNAMIC_DCA_CODE = `from datetime import datetime
+from typing import Optional
+
+from freqtrade.strategy import IStrategy
 import talib.abstract as ta
 
 
 class FreqaiDcaStrategy(IStrategy):
-    """AI Dynamic DCA / Grid: de AI zoekt strategische bodems om slim bij te
-    kopen als de prijs zakt, en verkoopt zodra ze een top herkent."""
+    """AI Dynamic DCA: de AI zoekt strategische bodems om slim bij te kopen
+    als de prijs zakt, en verkoopt automatisch bij een verwachte top."""
 
     timeframe = "15m"
     minimal_roi = {"0": 0.04, "60": 0.02, "180": 0}
@@ -139,6 +195,10 @@ class FreqaiDcaStrategy(IStrategy):
     # hieronder, tot maximaal dit aantal extra instapmomenten.
     position_adjustment_enable = True
     max_entry_position_adjustment = 3
+
+    # Point at which abs(&-target) is treated as maximum directional
+    # conviction in custom_stake_amount below.
+    stake_confidence_scale = 0.03
 
     def feature_engineering_expand_all(self, dataframe, period, metadata, **kwargs):
         dataframe["%-rsi"] = ta.RSI(dataframe, timeperiod=period)
@@ -192,15 +252,64 @@ class FreqaiDcaStrategy(IStrategy):
             return None
 
         return trade.stake_amount
+
+    def custom_stake_amount(self, pair: str, current_time: datetime, current_rate: float,
+                             proposed_stake: float, min_stake: Optional[float], max_stake: float,
+                             leverage: float, entry_tag: Optional[str], side: str,
+                             **kwargs) -> float:
+        """Sizes the *initial* entry (adjust_trade_position above handles
+        DCA rebuys separately) with how confident FreqAI is, never
+        exceeding the user's configured max_stake_pct of their
+        total_budget (both come from custom_user_settings in config.json —
+        see lib/hetzner.ts). stake_amount itself is "unlimited" in
+        config.json; this function is the real sizing logic."""
+        settings = self.config.get("custom_user_settings", {})
+        total_budget = float(settings.get("total_budget") or self.wallets.get_total_stake_amount() or proposed_stake)
+        max_stake_pct = float(settings.get("max_stake_pct", 20)) / 100
+
+        hard_cap = total_budget * max_stake_pct
+        floor = hard_cap * 0.25  # never risk less than a quarter of the user's own ceiling on a real signal
+
+        confidence = 0.5  # neutral fallback until FreqAI has produced a prediction for this candle
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair=pair, timeframe=self.timeframe)
+        if dataframe is not None and not dataframe.empty:
+            last_candle = dataframe.iloc[-1]
+
+            # Dissimilarity Index: how far this candle sits from the data
+            # FreqAI actually trained on. 0 = squarely in-distribution, 1 =
+            # at the DI_threshold cutoff FreqAI itself rejects outliers at.
+            di_value = last_candle.get("DI_values")
+            di_confidence = max(0.0, 1 - float(di_value)) if di_value is not None else 0.5
+
+            # Classifier FreqAI models expose a "<label>_prob" column with
+            # the model's own win probability (e.g. "up_prob"); our
+            # regression target doesn't, so fall back to how far the
+            # predicted move clears the entry threshold as a conviction proxy.
+            if "up_prob" in last_candle:
+                direction_confidence = float(last_candle["up_prob"])
+            else:
+                target = float(last_candle.get("&-target", 0))
+                direction_confidence = max(0.0, min(1.0, abs(target) / self.stake_confidence_scale))
+
+            confidence = max(0.0, min(1.0, (di_confidence + direction_confidence) / 2))
+
+        stake = floor + (hard_cap - floor) * confidence
+        stake = min(stake, hard_cap, max_stake)
+        if min_stake is not None:
+            stake = max(stake, min_stake)
+        return stake
 `;
 
-const TREND_CATCHER_CODE = `from freqtrade.strategy import IStrategy
+const TREND_CATCHER_CODE = `from datetime import datetime
+from typing import Optional
+
+from freqtrade.strategy import IStrategy
 import talib.abstract as ta
 
 
 class FreqaiTrendCatcherStrategy(IStrategy):
     """AI Trend Catcher: de AI analyseert grote marktverschuivingen, negeert
-    kleine ruis, en houdt posities langer vast voor een hogere beloning."""
+    ruis, en houdt posities langer vast voor een hogere beloning."""
 
     timeframe = "1h"
     minimal_roi = {"0": 0.15, "720": 0.08, "1440": 0}
@@ -210,6 +319,10 @@ class FreqaiTrendCatcherStrategy(IStrategy):
     trailing_stop_positive_offset = 0.04
     trailing_only_offset_is_reached = True
     process_only_new_candles = True
+
+    # Point at which abs(&-target) is treated as maximum directional
+    # conviction in custom_stake_amount below.
+    stake_confidence_scale = 0.08
 
     def feature_engineering_expand_all(self, dataframe, period, metadata, **kwargs):
         dataframe["%-ema"] = ta.EMA(dataframe, timeperiod=period)
@@ -241,6 +354,51 @@ class FreqaiTrendCatcherStrategy(IStrategy):
             "exit_long",
         ] = 1
         return dataframe
+
+    def custom_stake_amount(self, pair: str, current_time: datetime, current_rate: float,
+                             proposed_stake: float, min_stake: Optional[float], max_stake: float,
+                             leverage: float, entry_tag: Optional[str], side: str,
+                             **kwargs) -> float:
+        """Sizes the trade with how confident FreqAI is, never exceeding the
+        user's configured max_stake_pct of their total_budget (both come
+        from custom_user_settings in config.json — see lib/hetzner.ts).
+        stake_amount itself is "unlimited" in config.json; this function is
+        the real sizing logic."""
+        settings = self.config.get("custom_user_settings", {})
+        total_budget = float(settings.get("total_budget") or self.wallets.get_total_stake_amount() or proposed_stake)
+        max_stake_pct = float(settings.get("max_stake_pct", 20)) / 100
+
+        hard_cap = total_budget * max_stake_pct
+        floor = hard_cap * 0.25  # never risk less than a quarter of the user's own ceiling on a real signal
+
+        confidence = 0.5  # neutral fallback until FreqAI has produced a prediction for this candle
+        dataframe, _ = self.dp.get_analyzed_dataframe(pair=pair, timeframe=self.timeframe)
+        if dataframe is not None and not dataframe.empty:
+            last_candle = dataframe.iloc[-1]
+
+            # Dissimilarity Index: how far this candle sits from the data
+            # FreqAI actually trained on. 0 = squarely in-distribution, 1 =
+            # at the DI_threshold cutoff FreqAI itself rejects outliers at.
+            di_value = last_candle.get("DI_values")
+            di_confidence = max(0.0, 1 - float(di_value)) if di_value is not None else 0.5
+
+            # Classifier FreqAI models expose a "<label>_prob" column with
+            # the model's own win probability (e.g. "up_prob"); our
+            # regression target doesn't, so fall back to how far the
+            # predicted move clears the entry threshold as a conviction proxy.
+            if "up_prob" in last_candle:
+                direction_confidence = float(last_candle["up_prob"])
+            else:
+                target = float(last_candle.get("&-target", 0))
+                direction_confidence = max(0.0, min(1.0, abs(target) / self.stake_confidence_scale))
+
+            confidence = max(0.0, min(1.0, (di_confidence + direction_confidence) / 2))
+
+        stake = floor + (hard_cap - floor) * confidence
+        stake = min(stake, hard_cap, max_stake)
+        if min_stake is not None:
+            stake = max(stake, min_stake)
+        return stake
 `;
 
 export const STRATEGY_PRESETS: StrategyPreset[] = [
@@ -248,7 +406,7 @@ export const STRATEGY_PRESETS: StrategyPreset[] = [
     id: "ai-smart-scalper",
     title: "AI Smart Scalper",
     description:
-      "De AI voorspelt supersnelle prijsbewegingen. Koopt en verkoopt razendsnel voor veel kleine winsten. Ideaal voor actieve markten.",
+      "De AI voorspelt supersnelle prijsbewegingen. Koopt en verkoopt razendsnel voor veel kleine winsten.",
     risk: "Laag",
     timeframe: "5m",
     className: "FreqaiScalperStrategy",
@@ -273,9 +431,9 @@ export const STRATEGY_PRESETS: StrategyPreset[] = [
   },
   {
     id: "ai-dynamic-dca",
-    title: "AI Dynamic DCA / Grid",
+    title: "AI Dynamic DCA",
     description:
-      "De AI zoekt strategische bodems om slim bij te kopen als de prijs zakt (DCA). Verkoopt automatisch zodra de AI een top herkent.",
+      "De AI zoekt strategische bodems om slim bij te kopen als de prijs zakt. Verkoopt automatisch bij een verwachte top.",
     risk: "Gemiddeld",
     timeframe: "15m",
     className: "FreqaiDcaStrategy",
@@ -297,9 +455,9 @@ export const STRATEGY_PRESETS: StrategyPreset[] = [
     id: "ai-trend-catcher",
     title: "AI Trend Catcher",
     description:
-      "De AI analyseert de grote marktverschuivingen en negeert kleine ruis. Stapt in bij grote trends en houdt posities langer vast.",
+      "De AI analyseert de grote marktverschuivingen en negeert ruis. Stapt in bij grote trends en houdt posities langer vast.",
     risk: "Hoog",
-    timeframe: "1h / 4h",
+    timeframe: "1h of 4h",
     className: "FreqaiTrendCatcherStrategy",
     code: TREND_CATCHER_CODE,
     freqaiConfig: {

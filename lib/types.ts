@@ -21,7 +21,8 @@ export interface BotConfigurationDTO {
   strategyCode: string;
   freqaiConfig: FreqAIProfileConfig;
   pairWhitelist: string;
-  stakeAmount: number;
+  totalBudget: number;
+  maxStakePercentage: number;
   isPaperTrading: boolean;
   deploymentStatus: DeploymentStatus;
   aiModelPath: string | null;

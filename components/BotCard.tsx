@@ -145,7 +145,8 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
       exchange: bot.exchangeName,
       strategy: bot.strategy,
       pair_whitelist: bot.pairWhitelist.split(",").map((p) => p.trim()),
-      stake_amount: bot.stakeAmount,
+      stake_amount: "unlimited",
+      custom_user_settings: { total_budget: bot.totalBudget, max_stake_pct: bot.maxStakePercentage },
       dry_run: bot.isPaperTrading,
       ai_model_path: bot.aiModelPath ?? null,
       note: "Fill in your exchange API key/secret locally — they are never exported from the dashboard.",
@@ -218,6 +219,11 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
           <h3 className="font-semibold">{bot.botName}</h3>
           <p className="text-xs text-slate-400">
             {bot.exchangeName} &middot; {bot.strategy}
+          </p>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            Budget: €{bot.totalBudget.toLocaleString("nl-NL")} &middot; max €
+            {((bot.totalBudget * bot.maxStakePercentage) / 100).toLocaleString("nl-NL", { maximumFractionDigits: 2 })} per
+            trade ({bot.maxStakePercentage}%)
           </p>
         </div>
         <StatusBadge status={bot.deploymentStatus} />

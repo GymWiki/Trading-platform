@@ -167,7 +167,10 @@ interface CloudInitParams {
   /** Every bot runs FreqAI — this drives the generated freqai config.json block (see lib/strategy-presets.ts). */
   freqaiConfig: FreqAIProfileConfig;
   pairWhitelist: string[];
-  stakeAmount: number;
+  /** Total amount (stake_currency) this bot may put to work. freqtrade itself is told "unlimited" — custom_stake_amount in the strategy code is the real sizing logic, reading this back via custom_user_settings. */
+  totalBudget: number;
+  /** Hard ceiling, as a percent of totalBudget, custom_stake_amount enforces on any single trade. */
+  maxStakePercentage: number;
   isPaperTrading: boolean;
   aiModelDownloadUrl?: string;
   apiServerUsername: string;
@@ -197,7 +200,8 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
     strategyCode,
     freqaiConfig,
     pairWhitelist,
-    stakeAmount,
+    totalBudget,
+    maxStakePercentage,
     isPaperTrading,
     aiModelDownloadUrl,
     apiServerUsername,
@@ -213,11 +217,22 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
   const freqtradeConfig = {
     max_open_trades: 5,
     stake_currency: "USDT",
-    stake_amount: stakeAmount,
+    // "unlimited" hands sizing entirely to custom_stake_amount in the
+    // strategy code, which reads total_budget/max_stake_pct back out of
+    // custom_user_settings below — a fixed config.json number can't scale
+    // with FreqAI's own per-trade confidence the way that function does.
+    stake_amount: "unlimited",
     dry_run: isPaperTrading,
-    dry_run_wallet: 1000,
+    dry_run_wallet: totalBudget,
     cancel_open_orders_on_exit: false,
     trading_mode: "spot",
+    // Not read by freqtrade core — this is how the strategy's
+    // custom_stake_amount (see lib/strategy-presets.ts) gets the user's
+    // budget and per-trade risk ceiling out of config.json.
+    custom_user_settings: {
+      total_budget: totalBudget,
+      max_stake_pct: maxStakePercentage,
+    },
     exchange: {
       name: exchangeName,
       key: exchangeApiKey,
@@ -324,6 +339,9 @@ interface TrainingCloudInitParams {
   /** Every bot runs FreqAI — drives the training window, feature set, and downloaded history range. */
   freqaiConfig: FreqAIProfileConfig;
   pairWhitelist: string[];
+  /** Same budget/risk settings the live deploy gets — backtesting (which is how FreqAI training runs) still exercises custom_stake_amount, so it needs a real custom_user_settings block too. */
+  totalBudget: number;
+  maxStakePercentage: number;
   /**
    * GET endpoint (/api/train/cloud/upload-url) the VM calls right before
    * uploading to mint a fresh signed Storage URL — minted just-in-time
@@ -363,6 +381,8 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     strategyCode,
     freqaiConfig,
     pairWhitelist,
+    totalBudget,
+    maxStakePercentage,
     uploadUrlEndpoint,
     callbackUrl,
     callbackToken,
@@ -387,6 +407,11 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     stake_currency: "USDT",
     stake_amount: "unlimited",
     dry_run: true,
+    dry_run_wallet: totalBudget,
+    custom_user_settings: {
+      total_budget: totalBudget,
+      max_stake_pct: maxStakePercentage,
+    },
     trading_mode: "spot",
     exchange: {
       name: exchangeName,
