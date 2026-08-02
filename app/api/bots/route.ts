@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { encrypt } from "@/lib/encryption";
 import { botSelect, toBotDTO } from "@/lib/bot-select";
+import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import {
   isSafePythonIdentifier,
   strategyCodeDefinesClass,
@@ -65,6 +66,14 @@ export async function POST(req: NextRequest) {
     typeof maxStakePercentage !== "number"
   ) {
     return NextResponse.json({ error: "Missing required bot configuration fields" }, { status: 400 });
+  }
+
+  // Closed list, not free text (see lib/exchange-presets.ts) — exchangeName
+  // becomes the ccxt exchange id in the generated config.json, so an
+  // unsupported or misspelled value must be rejected here rather than
+  // surface as a cryptic failure deep in a cloud-init run.
+  if (!EXCHANGE_PRESETS.some((e) => e.id === exchangeName)) {
+    return NextResponse.json({ error: "exchangeName is not a supported exchange" }, { status: 400 });
   }
 
   if (!(totalBudget > 0)) {

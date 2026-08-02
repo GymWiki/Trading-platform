@@ -3,7 +3,7 @@
 import { useId, useState, type FormEvent } from "react";
 import { Loader2, Plus, X } from "lucide-react";
 import type { BotConfigurationDTO } from "@/lib/types";
-import { Select } from "@/components/ui/Select";
+import { ExchangeCombobox } from "@/components/ui/ExchangeCombobox";
 import { InfoTooltip } from "@/components/ui/Tooltip";
 import { StrategyPicker } from "@/components/ui/StrategyPicker";
 import { PairSelector } from "@/components/ui/PairSelector";
@@ -118,10 +118,9 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
             </Field>
 
             <FieldGroup label="Exchange">
-              <Select
+              <ExchangeCombobox
                 value={form.exchangeName}
                 onChange={(exchangeName) => setForm({ ...form, exchangeName })}
-                options={EXCHANGE_PRESETS.map((e) => ({ value: e.id, label: e.label, description: e.description }))}
                 aria-label="Exchange"
               />
             </FieldGroup>
