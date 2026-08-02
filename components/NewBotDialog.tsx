@@ -1,47 +1,30 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent } from "react";
 import { Loader2, Plus, X } from "lucide-react";
 import type { BotConfigurationDTO } from "@/lib/types";
+import { Select } from "@/components/ui/Select";
+import { InfoTooltip } from "@/components/ui/Tooltip";
+import { StrategyPicker } from "@/components/ui/StrategyPicker";
+import { PairSelector } from "@/components/ui/PairSelector";
+import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
+import { STRATEGY_PRESETS, type StrategyPreset } from "@/lib/strategy-presets";
 
 interface NewBotDialogProps {
   onCreated: (bot: BotConfigurationDTO) => void;
 }
 
-const SAMPLE_STRATEGY_CODE = `from freqtrade.strategy import IStrategy
-import talib.abstract as ta
-
-
-class SampleStrategy(IStrategy):
-    timeframe = "5m"
-    minimal_roi = {"0": 0.05}
-    stoploss = -0.10
-
-    def populate_indicators(self, dataframe, metadata):
-        dataframe["rsi"] = ta.RSI(dataframe)
-        return dataframe
-
-    def populate_entry_trend(self, dataframe, metadata):
-        dataframe.loc[dataframe["rsi"] < 30, "enter_long"] = 1
-        return dataframe
-
-    def populate_exit_trend(self, dataframe, metadata):
-        dataframe.loc[dataframe["rsi"] > 70, "exit_long"] = 1
-        return dataframe
-`;
+const DEFAULT_STRATEGY = STRATEGY_PRESETS[0];
 
 const EMPTY_FORM = {
   botName: "",
-  exchangeName: "binance",
+  exchangeName: EXCHANGE_PRESETS[0].id,
   exchangeApiKey: "",
   exchangeApiSecret: "",
-  strategy: "SampleStrategy",
-  strategyCode: SAMPLE_STRATEGY_CODE,
-  pairWhitelist: "BTC/USDT,ETH/USDT",
+  strategyId: DEFAULT_STRATEGY.id,
+  pairs: ["BTC/USDT", "ETH/USDT"] as string[],
   stakeAmount: 50,
 };
-
-const STRATEGY_NAME_PATTERN = "^[A-Za-z_][A-Za-z0-9_]{0,63}$";
 
 export function NewBotDialog({ onCreated }: NewBotDialogProps) {
   const [open, setOpen] = useState(false);
@@ -49,15 +32,34 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const selectedStrategy: StrategyPreset =
+    STRATEGY_PRESETS.find((s) => s.id === form.strategyId) ?? DEFAULT_STRATEGY;
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
+
+    if (form.pairs.length === 0) {
+      setError("Kies minstens 1 handelspaar.");
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       const res = await fetch("/api/bots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, isPaperTrading: true }),
+        body: JSON.stringify({
+          botName: form.botName,
+          exchangeName: form.exchangeName,
+          exchangeApiKey: form.exchangeApiKey,
+          exchangeApiSecret: form.exchangeApiSecret,
+          strategy: selectedStrategy.className,
+          strategyCode: selectedStrategy.code,
+          pairWhitelist: form.pairs.join(","),
+          stakeAmount: form.stakeAmount,
+          isPaperTrading: true,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to create bot");
@@ -86,80 +88,83 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="card-surface flex max-h-[90vh] w-full max-w-md flex-col p-6">
+      <div className="card-surface flex max-h-[90vh] w-full max-w-lg flex-col p-6">
         <div className="mb-4 flex shrink-0 items-center justify-between">
-          <h2 className="font-semibold">New Bot Configuration</h2>
+          <div>
+            <h2 className="font-semibold">Nieuwe bot instellen</h2>
+            <p className="text-xs text-slate-400">Geen technische kennis nodig — kies gewoon je voorkeuren.</p>
+          </div>
           <button type="button" onClick={() => setOpen(false)} className="text-slate-400 hover:text-white">
             <X className="h-4 w-4" />
           </button>
         </div>
 
         <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-            <Field label="Bot name">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+            <Field label="Botnaam">
               <input
                 required
                 value={form.botName}
                 onChange={(e) => setForm({ ...form, botName: e.target.value })}
                 className="input"
-                placeholder="btc-scalper"
+                placeholder="Mijn eerste bot"
               />
             </Field>
-            <Field label="Exchange">
-              <input
-                required
+
+            <FieldGroup label="Exchange">
+              <Select
                 value={form.exchangeName}
-                onChange={(e) => setForm({ ...form, exchangeName: e.target.value })}
-                className="input"
+                onChange={(exchangeName) => setForm({ ...form, exchangeName })}
+                options={EXCHANGE_PRESETS.map((e) => ({ value: e.id, label: e.label, description: e.description }))}
+                aria-label="Exchange"
               />
-            </Field>
-            <Field label="Exchange API key">
+            </FieldGroup>
+
+            <Field
+              label="API-key"
+              tooltip="Te vinden in de instellingen van je exchange-account. Geef deze key alleen trading-rechten, nooit opname-rechten (withdraw)."
+            >
               <input
                 required
                 type="password"
+                autoComplete="off"
                 value={form.exchangeApiKey}
                 onChange={(e) => setForm({ ...form, exchangeApiKey: e.target.value })}
                 className="input"
+                placeholder="••••••••••••"
               />
             </Field>
-            <Field label="Exchange API secret">
+
+            <Field
+              label="API-secret"
+              tooltip="Het bijbehorende geheime deel van je API-key. Wordt versleuteld opgeslagen en nooit getoond."
+            >
               <input
                 required
                 type="password"
+                autoComplete="off"
                 value={form.exchangeApiSecret}
                 onChange={(e) => setForm({ ...form, exchangeApiSecret: e.target.value })}
                 className="input"
+                placeholder="••••••••••••"
               />
             </Field>
-            <Field label="Strategy class name">
-              <input
-                required
-                value={form.strategy}
-                onChange={(e) => setForm({ ...form, strategy: e.target.value })}
-                pattern={STRATEGY_NAME_PATTERN}
-                title="Letters, digits, underscore; can't start with a digit — this becomes a Python class name and a filename."
-                className="input font-mono"
+
+            <FieldGroup label="Strategie">
+              <StrategyPicker
+                selectedId={form.strategyId}
+                onSelect={(preset) => setForm({ ...form, strategyId: preset.id })}
               />
-            </Field>
-            <Field label="Strategy source (must define this exact class)">
-              <textarea
-                required
-                value={form.strategyCode}
-                onChange={(e) => setForm({ ...form, strategyCode: e.target.value })}
-                rows={12}
-                spellCheck={false}
-                className="input resize-y font-mono text-xs leading-relaxed"
-              />
-            </Field>
-            <Field label="Pair whitelist (comma separated)">
-              <input
-                required
-                value={form.pairWhitelist}
-                onChange={(e) => setForm({ ...form, pairWhitelist: e.target.value })}
-                className="input"
-              />
-            </Field>
-            <Field label="Stake amount (USDT)">
+            </FieldGroup>
+
+            <FieldGroup label="Handelsparen">
+              <PairSelector selected={form.pairs} onChange={(pairs) => setForm({ ...form, pairs })} />
+            </FieldGroup>
+
+            <Field
+              label="Inzet per trade (USDT)"
+              tooltip="Het maximale bedrag in USDT dat deze bot per trade mag inzetten. Bij paper trading wordt hier niet écht mee gehandeld."
+            >
               <input
                 required
                 type="number"
@@ -171,7 +176,11 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
               />
             </Field>
 
-            {error && <p className="text-xs text-red-400">{error}</p>}
+            {error && (
+              <p role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                {error}
+              </p>
+            )}
           </div>
 
           <button
@@ -180,7 +189,7 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
             className="mt-4 flex w-full shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-background transition hover:bg-primary-hover disabled:opacity-50"
           >
             {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
-            Create bot
+            Bot aanmaken
           </button>
         </form>
       </div>
@@ -188,11 +197,56 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+// For a field with exactly one native form control — a real <label>
+// wrapper gives correct implicit association with no downsides.
+function Field({
+  label,
+  tooltip,
+  children,
+}: {
+  label: string;
+  tooltip?: string;
+  children: React.ReactNode;
+}) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs font-medium text-slate-400">{label}</span>
+      <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-400">
+        {label}
+        {tooltip && <InfoTooltip text={tooltip} />}
+      </span>
       {children}
     </label>
+  );
+}
+
+// For a field built from a composite widget with multiple interactive
+// descendants (Select, StrategyPicker, PairSelector). Wrapping several
+// buttons in a native <label> is a real bug, not just a style nit: once a
+// click handler mutates the DOM (e.g. removing the first button), the
+// browser's own label-click-forwarding step re-evaluates "the label's
+// control" against the *new* DOM and fires a second, spurious click on
+// whatever button ends up first — observed here as removing one selected
+// pair silently removing a second one too. A plain group with
+// aria-labelledby gives the same accessible name without that behavior.
+function FieldGroup({
+  label,
+  tooltip,
+  children,
+}: {
+  label: string;
+  tooltip?: string;
+  children: React.ReactNode;
+}) {
+  const labelId = useId();
+  return (
+    <div>
+      <span id={labelId} className="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-400">
+        {label}
+        {tooltip && <InfoTooltip text={tooltip} />}
+      </span>
+      <div role="group" aria-labelledby={labelId}>
+        {children}
+      </div>
+    </div>
   );
 }
