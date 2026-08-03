@@ -6,7 +6,12 @@ const HETZNER_API_BASE = "https://api.hetzner.cloud/v1";
 
 function requireHetznerToken(): string {
   const token = process.env.HETZNER_API_TOKEN;
-  if (!token) throw new Error("HETZNER_API_TOKEN is not set");
+  if (!token) {
+    throw new Error(
+      "HETZNER_API_TOKEN is not set (checked in lib/hetzner.ts, requireHetznerToken()) — " +
+        "set it in the Vercel project's Environment Variables before provisioning, stopping, or deleting a VPS.",
+    );
+  }
   return token;
 }
 

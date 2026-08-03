@@ -40,7 +40,12 @@ export async function startCloudTrainingJob({ bot, cancelOpenOrders = false }: S
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   if (!appUrl) throw new Error("NEXT_PUBLIC_APP_URL is not configured");
   const hetznerApiToken = process.env.HETZNER_API_TOKEN;
-  if (!hetznerApiToken) throw new Error("HETZNER_API_TOKEN is not configured");
+  if (!hetznerApiToken) {
+    throw new Error(
+      "HETZNER_API_TOKEN is not set (checked in lib/train-cloud.ts, startCloudTrainingJob()) — " +
+        "set it in the Vercel project's Environment Variables before starting a cloud training job.",
+    );
+  }
 
   // Priority rule: training/updating always wins over active trading
   // (paper or live), and the pause must be real, not just a status label —
