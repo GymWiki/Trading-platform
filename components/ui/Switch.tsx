@@ -31,8 +31,17 @@ export function Switch({ checked, onChange, disabled, ...aria }: SwitchProps) {
     >
       <span
         className={cn(
-          "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform",
-          checked ? "translate-x-4" : "translate-x-0.5",
+          // left-0.5 is load-bearing, not decorative: an absolutely
+          // positioned element with no left/right set falls back to its
+          // CSS "static position", which here inherits text-align:center
+          // from the button's UA default — putting the thumb's resting
+          // position at the track's horizontal center (18px into a 36px
+          // track) instead of its left edge. Anchoring left-0.5 explicitly
+          // makes the translate-x-4 below land flush against the right
+          // inset (36 - 0.5 thumb inset - 16 thumb width - 2 = matches the
+          // left inset) instead of overflowing past the track.
+          "absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform",
+          checked ? "translate-x-4" : "translate-x-0",
         )}
       />
     </button>

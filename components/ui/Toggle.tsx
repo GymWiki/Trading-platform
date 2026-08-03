@@ -30,8 +30,14 @@ export function TrainingModeToggle({ mode, onChange, disabled }: TrainingModeTog
       >
         <span
           className={cn(
-            "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform",
-            isCloud ? "translate-x-4" : "translate-x-0.5",
+            // left-0.5 pins the thumb's resting position explicitly — left
+            // unset here would resolve to the track's horizontal center
+            // (inherited text-align:center from the parent button's UA
+            // default), not its left edge, pushing the "on" translate past
+            // the track's right side. See components/ui/Switch.tsx for the
+            // same fix with the full explanation.
+            "absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform",
+            isCloud ? "translate-x-4" : "translate-x-0",
           )}
         />
       </span>
