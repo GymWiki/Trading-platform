@@ -50,6 +50,25 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
 
+  // Optimistic overrides for the two network-backed toggles below: bot.X
+  // only changes once the parent re-renders with a fresh prop after
+  // onUpdate, which used to leave the switch visually frozen in its old
+  // position for the whole PATCH round-trip. Set on click, cleared once
+  // that PATCH settles (success or failure) — cleared, not left set, so a
+  // failed request correctly snaps back to the real bot.X value rather
+  // than getting stuck showing a change that was never actually saved.
+  const [optimisticTrainingMode, setOptimisticTrainingMode] = useState<"LOCAL" | "CLOUD" | null>(null);
+  const [optimisticAutoCompound, setOptimisticAutoCompound] = useState<boolean | null>(null);
+  // React's `disabled` prop on the toggle only takes effect on the render
+  // *after* the state update that sets isToggling*, so a fast double-click
+  // (or a click event firing twice for any other reason) can still reach
+  // this handler a second time before that re-render commits. A ref is
+  // read/written synchronously, immune to that timing gap, so it's the
+  // actual guard against a double-fire — isToggling* alone (disabling the
+  // button) is a courtesy for slow networks, not a correctness guarantee.
+  const trainingModeInFlight = useRef(false);
+  const autoCompoundInFlight = useRef(false);
+
   const jobActive = bot.latestTrainingJob?.status === "QUEUED" || bot.latestTrainingJob?.status === "TRAINING";
   const canGoLive = bot.status === "TRAINING_PAPER_TRADE" && bot.deploymentStatus === "VPS_ACTIVE";
   const isPaused = bot.status === "PAUSED_EMERGENCY" || bot.status === "SLEEPING";
@@ -70,8 +89,11 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   }
 
   async function handleTrainingModeChange(trainingMode: "LOCAL" | "CLOUD") {
+    if (trainingModeInFlight.current) return;
+    trainingModeInFlight.current = true;
     setError(null);
     setIsTogglingTrainingMode(true);
+    setOptimisticTrainingMode(trainingMode);
     try {
       const data = await apiFetch<{ bot: BotConfigurationDTO }>(`/api/bots/${bot.id}`, {
         method: "PATCH",
@@ -82,7 +104,9 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
     } catch (err) {
       setError(toErrorMessage(err, "Failed to update training mode"));
     } finally {
+      setOptimisticTrainingMode(null);
       setIsTogglingTrainingMode(false);
+      trainingModeInFlight.current = false;
     }
   }
 
@@ -90,8 +114,11 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   // into config.json (see lib/deploy-bot.ts, lib/hetzner.ts), same as a
   // totalBudget change via Go Live.
   async function handleAutoCompoundChange(autoCompound: boolean) {
+    if (autoCompoundInFlight.current) return;
+    autoCompoundInFlight.current = true;
     setError(null);
     setIsTogglingAutoCompound(true);
+    setOptimisticAutoCompound(autoCompound);
     try {
       const data = await apiFetch<{ bot: BotConfigurationDTO }>(`/api/bots/${bot.id}`, {
         method: "PATCH",
@@ -102,7 +129,9 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
     } catch (err) {
       setError(toErrorMessage(err, "Kon auto-compounding niet wijzigen"));
     } finally {
+      setOptimisticAutoCompound(null);
       setIsTogglingAutoCompound(false);
+      autoCompoundInFlight.current = false;
     }
   }
 
@@ -306,7 +335,7 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
           </p>
         </div>
         <Switch
-          checked={bot.autoCompound}
+          checked={optimisticAutoCompound ?? bot.autoCompound}
           onChange={handleAutoCompoundChange}
           disabled={isTogglingAutoCompound}
           aria-label="Auto-Compounding"
@@ -372,7 +401,7 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
 
       <div className="space-y-2 rounded-lg border border-border p-3">
         <TrainingModeToggle
-          mode={bot.trainingMode}
+          mode={optimisticTrainingMode ?? bot.trainingMode}
           onChange={handleTrainingModeChange}
           disabled={jobActive || isTogglingTrainingMode}
         />

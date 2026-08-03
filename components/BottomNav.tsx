@@ -14,10 +14,16 @@ const TABS = [
 // The mobile alternative to a sidebar (per the design brief: no complex
 // sidebars on small screens) — fixed to the viewport bottom, thumb reach
 // on any phone size. Desktop keeps Navbar's inline text links instead
-// (this is md:hidden); only rendered at all when Navbar already confirmed
-// an authenticated session, so no separate auth check here.
+// (this is md:hidden); rendered only when Navbar already confirmed an
+// authenticated session, so no separate auth check here — but auth alone
+// isn't enough to gate this: a signed-in user can still land on "/" (the
+// marketing page also renders <Navbar />), and this nav's own destinations
+// don't include it, so it stays hidden there and only appears once the
+// user has actually navigated into one of the three tabs below.
 export function BottomNav() {
   const pathname = usePathname();
+  const isOnAppRoute = TABS.some(({ href }) => pathname === href || pathname.startsWith(`${href}/`));
+  if (!isOnAppRoute) return null;
 
   return (
     <nav
