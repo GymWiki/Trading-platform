@@ -129,23 +129,46 @@ interface HetznerServerResponse {
 // Not every server type is orderable in every location (e.g. "unsupported
 // location for server type" — a real 422 seen in production) — Hetzner's
 // own catalog is the only source of truth for that, and it isn't stable
-// enough to hardcode a snapshot of it here. `prices` on a server type is
-// keyed per-location, so its location list *is* the availability list.
+// enough to hardcode a snapshot of it here.
+//
+// server_types[].prices[].location is NOT that source of truth, even
+// though it looks like one: it's Hetzner's pricing catalog, which can list
+// a location a type has a historical/listed price for without that type
+// actually having capacity there right now — exactly the mismatch that
+// made an earlier version of this check claim a location Hetzner had just
+// rejected with a 422 was "available". datacenters[].server_types.available
+// is the real, current-capacity list actually enforced at server-creation
+// time, so that's what gets checked here instead.
 async function fetchLocationsForServerType(serverType: string, token: string): Promise<string[]> {
-  const res = await hetznerFetch(`/server_types?name=${encodeURIComponent(serverType)}`, {
+  const typeRes = await hetznerFetch(`/server_types?name=${encodeURIComponent(serverType)}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) {
-    throw new Error(`Hetzner API error (${res.status}): ${await res.text()}`);
+  if (!typeRes.ok) {
+    throw new Error(`Hetzner API error (${typeRes.status}): ${await typeRes.text()}`);
   }
-  const { server_types } = (await res.json()) as {
-    server_types: Array<{ name: string; prices: Array<{ location: string }> }>;
-  };
+  const { server_types } = (await typeRes.json()) as { server_types: Array<{ id: number; name: string }> };
   const match = server_types.find((t) => t.name === serverType);
   if (!match) {
     throw new Error(`Hetzner server type "${serverType}" does not exist`);
   }
-  return match.prices.map((p) => p.location);
+
+  const dcRes = await hetznerFetch(`/datacenters`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!dcRes.ok) {
+    throw new Error(`Hetzner API error (${dcRes.status}): ${await dcRes.text()}`);
+  }
+  const { datacenters } = (await dcRes.json()) as {
+    datacenters: Array<{ location: { name: string }; server_types: { available: number[] } }>;
+  };
+
+  const locations = new Set<string>();
+  for (const dc of datacenters) {
+    if (dc.server_types.available.includes(match.id)) {
+      locations.add(dc.location.name);
+    }
+  }
+  return Array.from(locations);
 }
 
 // Validates the configured HETZNER_LOCATION against this server type's real
