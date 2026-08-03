@@ -26,7 +26,15 @@ export default function SignupPage() {
       const { data, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
-        options: { data: { name } },
+        options: {
+          data: { name },
+          // Without this, the confirmation email links back to whatever
+          // Supabase's project "Site URL" is set to — which drifts stale
+          // the moment the app moves domains (see NEXT_PUBLIC_APP_URL in
+          // .env.example) and would send users to the wrong host instead
+          // of this deployment's own /login.
+          emailRedirectTo: `${window.location.origin}/login`,
+        },
       });
 
       if (signUpError) {
