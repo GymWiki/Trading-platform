@@ -4,7 +4,13 @@ export interface BotSummary {
   id: string;
   name: string;
   mode: "paper" | "live";
-  roiPercent: number;
+  /**
+   * Optional: there's no stored ROI on a bot's own DB row (see
+   * lib/platform-bot-summary.ts) — a real figure needs live trade data.
+   * The badge below is simply omitted when this is undefined, rather than
+   * showing a fabricated 0%.
+   */
+  roiPercent?: number;
   /** Plain-language summary of the last trade — no "sell_reason: roi" jargon. */
   lastTradeSummary: string;
 }
@@ -15,7 +21,8 @@ const MODE_COPY = {
 } as const;
 
 export function BotCard({ bot }: { bot: BotSummary }) {
-  const isPositive = bot.roiPercent >= 0;
+  const hasRoi = bot.roiPercent !== undefined;
+  const isPositive = hasRoi && bot.roiPercent! >= 0;
   const ModeIcon = MODE_COPY[bot.mode].icon;
 
   return (
@@ -35,11 +42,17 @@ export function BotCard({ bot }: { bot: BotSummary }) {
           </span>
         </div>
 
-        <div className={`flex items-center gap-1 font-panda-mono text-sm font-semibold tabular-nums ${isPositive ? "text-panda-bamboo" : "text-panda-panic"}`}>
-          {isPositive ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-          {isPositive ? "+" : ""}
-          {bot.roiPercent.toFixed(1)}%
-        </div>
+        {hasRoi && (
+          <div
+            className={`flex items-center gap-1 font-panda-mono text-sm font-semibold tabular-nums ${
+              isPositive ? "text-panda-bamboo" : "text-panda-panic"
+            }`}
+          >
+            {isPositive ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+            {isPositive ? "+" : ""}
+            {bot.roiPercent!.toFixed(1)}%
+          </div>
+        )}
       </div>
 
       {/* Humanized last-trade line — the whole point being that a

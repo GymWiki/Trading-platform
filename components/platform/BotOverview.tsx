@@ -15,11 +15,18 @@ export function BotOverview({ bots }: { bots: BotSummary[] }) {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {bots.map((bot) => (
-          <BotCard key={bot.id} bot={bot} />
-        ))}
-      </div>
+      {bots.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 rounded-2xl bg-panda-charcoal px-6 py-14 text-center">
+          <span className="text-3xl">🎋</span>
+          <p className="text-sm text-panda-mist">Nog geen bots — maak er eentje aan om te beginnen.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {bots.map((bot) => (
+            <BotCard key={bot.id} bot={bot} />
+          ))}
+        </div>
+      )}
     </section>
   );
 }
