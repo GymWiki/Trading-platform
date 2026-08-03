@@ -108,6 +108,7 @@ export async function startCloudTrainingJob({ bot, cancelOpenOrders = false }: S
       autoCompound: bot.autoCompound,
       uploadUrlEndpoint: `${appUrl}/api/train/cloud/upload-url`,
       callbackUrl: `${appUrl}/api/train/cloud/callback`,
+      progressUrl: `${appUrl}/api/train/cloud/progress`,
       callbackToken,
       hetznerApiToken,
     });

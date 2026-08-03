@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Download,
   Rocket,
@@ -28,6 +28,7 @@ import { TrainingModeToggle } from "@/components/ui/Toggle";
 import { GoLiveModal } from "@/components/GoLiveModal";
 import { ConnectExchangeDialog } from "@/components/ConnectExchangeDialog";
 import { TradeHistoryFeed } from "@/components/TradeHistoryFeed";
+import { TrainingProgressBar } from "@/components/TrainingProgressBar";
 import { Switch } from "@/components/ui/Switch";
 import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import { DEFAULT_PAPER_TOTAL_BUDGET, DEFAULT_PAPER_MAX_STAKE_PERCENTAGE } from "@/lib/paper-trading-defaults";
@@ -57,6 +58,12 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   const [isResuming, setIsResuming] = useState(false);
   const [isConnectExchangeOpen, setIsConnectExchangeOpen] = useState(false);
   const [isDisconnectingExchange, setIsDisconnectingExchange] = useState(false);
+  // Only set once the start-cloud-training call actually succeeds (not on
+  // the click itself) — see handleStartCloudTraining. Auto-dismisses after
+  // a few seconds; the persistent, ongoing signal is TrainingProgressBar
+  // below, this is just the one-shot "yep, it started" confirmation.
+  const [justStartedCloudTraining, setJustStartedCloudTraining] = useState(false);
+  const justStartedCloudTrainingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Optimistic overrides for the two network-backed toggles below: bot.X
   // only changes once the parent re-renders with a fresh prop after
@@ -80,6 +87,12 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   const jobActive = bot.latestTrainingJob?.status === "QUEUED" || bot.latestTrainingJob?.status === "TRAINING";
   const canGoLive = bot.status === "TRAINING_PAPER_TRADE" && bot.deploymentStatus === "VPS_ACTIVE";
   const isPaused = bot.status === "PAUSED_EMERGENCY" || bot.status === "SLEEPING";
+
+  useEffect(() => {
+    return () => {
+      if (justStartedCloudTrainingTimeout.current) clearTimeout(justStartedCloudTrainingTimeout.current);
+    };
+  }, []);
 
   // Clears PAUSED_EMERGENCY (Panic Button) or SLEEPING (Sleep Mode) — the
   // only place either status is ever cleared, see app/api/bots/[id]/resume.
@@ -219,6 +232,12 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
           createdAt: data.job.createdAt,
         },
       });
+      // Only reachable once the call above actually succeeded — a click
+      // that fails (network error, busy bot, etc.) hits the catch below
+      // and never shows this.
+      setJustStartedCloudTraining(true);
+      if (justStartedCloudTrainingTimeout.current) clearTimeout(justStartedCloudTrainingTimeout.current);
+      justStartedCloudTrainingTimeout.current = setTimeout(() => setJustStartedCloudTraining(false), 6000);
     } catch (err) {
       setError(toErrorMessage(err, "Failed to start cloud training"));
     } finally {
@@ -488,6 +507,13 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
         />
       )}
 
+      {justStartedCloudTraining && (
+        <div className="flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2.5 text-xs font-medium text-primary">
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+          Cloud training gestart voor {bot.botName} — dit kan een tijdje duren.
+        </div>
+      )}
+
       <div className="space-y-2 rounded-lg border border-border p-3">
         <TrainingModeToggle
           mode={optimisticTrainingMode ?? bot.trainingMode}
@@ -507,19 +533,26 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
         )}
 
         {bot.trainingMode === "CLOUD" ? (
-          <button
-            type="button"
-            onClick={handleStartCloudTraining}
-            disabled={isStartingCloudTraining || jobActive}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-primary/40 px-3 py-2 text-xs font-medium text-primary transition hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isStartingCloudTraining || jobActive ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Cloud className="h-3.5 w-3.5" />
+          <>
+            <button
+              type="button"
+              onClick={handleStartCloudTraining}
+              disabled={isStartingCloudTraining || jobActive}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-primary/40 px-3 py-2 text-xs font-medium text-primary transition hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isStartingCloudTraining || jobActive ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Cloud className="h-3.5 w-3.5" />
+              )}
+              {jobActive ? "Training in de cloud…" : "Start Cloud Training"}
+            </button>
+            {/* Own polling loop, distinct from BotFleetGrid's slower
+                fleet-wide refresh — see that component's doc comment. */}
+            {jobActive && bot.latestTrainingJob && (
+              <TrainingProgressBar jobId={bot.latestTrainingJob.id} />
             )}
-            {jobActive ? "Training in the cloud…" : "Start Cloud Training"}
-          </button>
+          </>
         ) : isTauri() ? (
           <button
             type="button"

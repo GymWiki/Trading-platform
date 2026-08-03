@@ -652,6 +652,8 @@ interface TrainingCloudInitParams {
   uploadUrlEndpoint: string;
   /** Full URL to POST /api/train/cloud/callback on this deployment. */
   callbackUrl: string;
+  /** Full URL to POST /api/train/cloud/progress on this deployment — best-effort stage checkpoints, distinct from callbackUrl's terminal COMPLETED/FAILED report. */
+  progressUrl: string;
   /** One-time bearer token identifying this specific TrainingJob to the callback route. */
   callbackToken: string;
   /** Needed so the VM can delete itself when done — see failsafe notes in lib/hetzner.ts callers. */
@@ -688,6 +690,7 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     autoCompound,
     uploadUrlEndpoint,
     callbackUrl,
+    progressUrl,
     callbackToken,
     hetznerApiToken,
     // Needs enough history to fill the training window plus backtest window
@@ -779,6 +782,7 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
 set -uo pipefail
 
 CALLBACK_URL="${shellEscapeDouble(callbackUrl)}"
+PROGRESS_URL="${shellEscapeDouble(progressUrl)}"
 UPLOAD_URL_ENDPOINT="${shellEscapeDouble(uploadUrlEndpoint)}"
 CALLBACK_TOKEN="${shellEscapeDouble(callbackToken)}"
 HETZNER_API_TOKEN="${shellEscapeDouble(hetznerApiToken)}"
@@ -799,6 +803,21 @@ report_status() {
     -H "Content-Type: application/json" \\
     -d "$payload" || true
   REPORTED=1
+}
+
+# Best-effort real checkpoints — never allowed to fail or block the actual
+# training run (hence "|| true" and no fail() on a bad response), since a
+# missed progress ping is just a slightly stale progress bar, not a reason
+# to abort a multi-hour training job. See GET /api/train/cloud/status for
+# how these get turned into a percentage/ETA.
+report_stage() {
+  local stage="$1"
+  local payload
+  payload=$(jq -n --arg stage "$stage" '{stage: $stage}')
+  curl -fsS -m 15 -X POST "$PROGRESS_URL" \\
+    -H "Authorization: Bearer $CALLBACK_TOKEN" \\
+    -H "Content-Type: application/json" \\
+    -d "$payload" || true
 }
 
 # Fires on ANY script exit — success, a failed command, or a signal from the
@@ -828,12 +847,15 @@ fail() {
 mkdir -p /opt/freqtrade/user_data/models
 cd /opt/freqtrade || fail "could not cd into /opt/freqtrade"
 
+report_stage "PULLING_IMAGE"
 docker pull freqtradeorg/freqtrade:stable || fail "could not pull freqtrade image"
 
+report_stage "DOWNLOADING_DATA"
 docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data freqtradeorg/freqtrade:stable \\
   download-data --config user_data/config.json --timerange "$TIMERANGE" --timeframe "${shellEscapeDouble(timeframe)}" \\
   || fail "historical data download failed"
 
+report_stage "TRAINING"
 docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data freqtradeorg/freqtrade:stable \\
   backtesting --config user_data/config.json --strategy "$STRATEGY" \\
   --freqaimodel "$FREQAI_MODEL" --timerange "$TIMERANGE" \\
@@ -845,6 +867,7 @@ if [ "$MODEL_COUNT" -ne 1 ]; then
 fi
 MODEL_FILE=$(find user_data/models -name '*.joblib')
 
+report_stage "UPLOADING"
 # Minted just before uploading rather than baked into cloud-init, so a long
 # training run can never race a signed URL's fixed expiry window.
 UPLOAD_URL=$(curl -fsS -m 30 "$UPLOAD_URL_ENDPOINT" \\
@@ -856,6 +879,7 @@ curl -fsS -m 1800 -X PUT "$UPLOAD_URL" \\
   --data-binary "@$MODEL_FILE" \\
   || fail "model upload to storage failed"
 
+report_stage "DONE"
 report_status "COMPLETED"
 exit 0
 `;

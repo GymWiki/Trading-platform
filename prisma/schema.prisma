@@ -79,6 +79,26 @@ enum TrainingStatus {
   @@map("training_status")
 }
 
+// Coarse phase within a single cloud training run — reported by the
+// training VM's own script at each real checkpoint (see lib/hetzner.ts
+// buildFreqAITrainingCloudInit's report_stage calls) via
+// POST /api/train/cloud/progress. This is a genuine signal, not a guess:
+// freqtrade's `backtesting` command (how FreqAI training actually runs)
+// has no fine-grained progress API to poll, so GET /api/train/cloud/status
+// combines these real stage transitions with a time-based estimate,
+// interpolated using this bot's own historical run durations, to produce
+// a smooth percentage — see that route for the exact math.
+enum TrainingStage {
+  QUEUED
+  PULLING_IMAGE
+  DOWNLOADING_DATA
+  TRAINING
+  UPLOADING
+  DONE
+
+  @@map("training_stage")
+}
+
 // Operational lifecycle of the bot itself — distinct from TrainingStatus,
 // which tracks a single training run. TRAINING/UPDATING_MODEL are the
 // statuses that must never overlap with trading (paper or live): see
@@ -278,6 +298,12 @@ model TrainingJob {
 
   mode   TrainingMode
   status TrainingStatus @default(QUEUED)
+
+  // Real checkpoint the VM last reported reaching, plus when — see
+  // TrainingStage doc comment. stageUpdatedAt anchors the time-based
+  // interpolation within the current stage in GET /api/train/cloud/status.
+  stage          TrainingStage @default(QUEUED) @map("stage")
+  stageUpdatedAt DateTime      @default(now()) @map("stage_updated_at")
 
   // sha256 of the one-time bearer token handed to the ephemeral training VM
   // so it can report status back without holding a real user session.
