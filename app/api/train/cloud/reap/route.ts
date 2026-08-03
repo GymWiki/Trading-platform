@@ -155,6 +155,33 @@ const handleReap = withErrorHandling(async (req: NextRequest) => {
     }
   }
 
+  // Separate sweep for a job that never even got this far: still status
+  // QUEUED, meaning startCloudTrainingJob (lib/train-cloud.ts) never
+  // reached the update that both sets hetznerServerId AND flips status to
+  // TRAINING. The one way that can happen without also hitting that
+  // function's own catch block (which already marks FAILED) is the
+  // platform killing the request mid-flight — a Vercel function timeout
+  // during the createHetznerServer call skips the catch entirely. Every
+  // other branch above requires hetznerServerId to be set, so a job stuck
+  // exactly here — no server, nothing to delete — would otherwise be
+  // invisible to this cron forever.
+  const stuckQueued = await prisma.trainingJob.findMany({
+    where: { status: "QUEUED", createdAt: { lt: earlyStaleCutoff } },
+  });
+  for (const job of stuckQueued) {
+    const reason =
+      "Reaped: job never left QUEUED — the request that provisions the Hetzner server likely timed out or crashed before it could run";
+    await prisma.trainingJob.update({
+      where: { id: job.id },
+      data: { status: "FAILED", errorMessage: reason },
+    });
+    await prisma.botConfiguration.update({
+      where: { id: job.botId },
+      data: { status: "ERROR", lastError: reason },
+    });
+    results.push({ jobId: job.id, serverId: "(none)", ok: true });
+  }
+
   return NextResponse.json({ reaped: results.length, results });
 });
 

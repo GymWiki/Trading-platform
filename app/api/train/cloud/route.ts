@@ -6,6 +6,15 @@ import { startCloudTrainingJob, TrainingBusyError } from "@/lib/train-cloud";
 import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
 export const dynamic = "force-dynamic";
+// startCloudTrainingJob's own try/catch (lib/train-cloud.ts) is what turns a
+// slow/failing Hetzner call into a clean FAILED status instead of a job
+// stuck at QUEUED forever — but that safety net only runs if the platform
+// lets the function keep executing. hetznerFetch's own abort is 15s, and
+// resolveServerLocation can make up to two of those sequential calls
+// before the actual create call — comfortably over a 10s default Vercel
+// timeout, which would kill the function (and skip the catch block
+// entirely) before our own error handling ever gets a chance to run.
+export const maxDuration = 60;
 
 const startTrainingSchema = z.object({
   botId: z.string().min(1, "botId is required"),

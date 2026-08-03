@@ -608,12 +608,17 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
         />
 
         {bot.latestTrainingJob && (
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-1.5">
             <TrainingStatusBadge status={bot.latestTrainingJob.status} />
+            {/* Full message, wrapped — never truncated. These reap/callback
+                reasons ("Reaped: no progress past QUEUED for over 20
+                minutes — ...") are exactly the part that explains what
+                happened, so cutting them off with an ellipsis defeated the
+                point of showing them at all. */}
             {bot.latestTrainingJob.status === "FAILED" && bot.latestTrainingJob.errorMessage && (
-              <span className="truncate text-[11px] text-red-400" title={bot.latestTrainingJob.errorMessage}>
+              <p className="whitespace-pre-wrap break-words text-[11px] text-red-400">
                 {bot.latestTrainingJob.errorMessage}
-              </span>
+              </p>
             )}
           </div>
         )}

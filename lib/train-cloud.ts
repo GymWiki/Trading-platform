@@ -113,12 +113,21 @@ export async function startCloudTrainingJob({ bot, cancelOpenOrders = false }: S
       hetznerApiToken,
     });
 
+    // Explicit markers either side of the one call that actually leaves
+    // the DB — if a job is ever found stuck at QUEUED with no
+    // hetznerServerId, these two lines (present or not, in Vercel's
+    // function logs for this invocation) are what tells you whether
+    // createHetznerServer was ever reached at all, versus started and
+    // never returned (the platform killing the function mid-call being
+    // the one failure mode that skips the catch block below entirely).
+    console.log(`[train-cloud] job ${job.id}: requesting Hetzner server (type=${TRAINING_SERVER_TYPE})`);
     const { server } = await createHetznerServer({
       name: `train-${job.id}`,
       cloudInit,
       serverType: TRAINING_SERVER_TYPE,
       firewallProfile: "training",
     });
+    console.log(`[train-cloud] job ${job.id}: Hetzner server ${server.id} created, flipping QUEUED -> TRAINING`);
 
     return await prisma.trainingJob.update({
       where: { id: job.id },
@@ -126,6 +135,7 @@ export async function startCloudTrainingJob({ bot, cancelOpenOrders = false }: S
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to start cloud training";
+    console.error(`[train-cloud] job ${job.id}: provisioning failed, marking FAILED — ${message}`);
     await prisma.trainingJob.update({
       where: { id: job.id },
       data: { status: "FAILED", errorMessage: message },

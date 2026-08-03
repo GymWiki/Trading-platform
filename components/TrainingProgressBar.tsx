@@ -117,8 +117,11 @@ export function TrainingProgressBar({ jobId }: TrainingProgressBarProps) {
       {!isDone && !isTerminalWithIssue && data.estimatedRemainingSeconds !== null && (
         <p className="text-[11px] text-slate-500">Nog ongeveer {formatDuration(data.estimatedRemainingSeconds)}</p>
       )}
+      {/* Full message, wrapped — never truncated. A reap/callback reason
+          like "Reaped: no progress past QUEUED for over 20 minutes — ..."
+          is exactly the part that explains what happened. */}
       {isTerminalWithIssue && data.errorMessage && (
-        <p className={`truncate text-[11px] ${isFailed ? "text-red-400" : "text-slate-500"}`} title={data.errorMessage}>
+        <p className={`whitespace-pre-wrap break-words text-[11px] ${isFailed ? "text-red-400" : "text-slate-500"}`}>
           {data.errorMessage}
         </p>
       )}
