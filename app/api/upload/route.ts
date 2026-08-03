@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { withErrorHandling } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 const MAX_FILE_SIZE_BYTES = 200 * 1024 * 1024; // 200MB, matches the "models" bucket's file_size_limit
 const MODELS_BUCKET = "models";
 

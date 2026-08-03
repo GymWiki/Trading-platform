@@ -7,6 +7,8 @@ import { deleteHetznerServer } from "@/lib/hetzner";
 import { deployBotToVps } from "@/lib/deploy-bot";
 import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 const MAX_ERROR_MESSAGE_LENGTH = 2000;
 
 const callbackBodySchema = z.object({

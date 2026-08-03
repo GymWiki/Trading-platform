@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { deleteHetznerServer } from "@/lib/hetzner";
 import { withErrorHandling } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 // A TRAINING job older than this has blown well past the cloud-init
 // script's own `timeout ... 4h` ceiling (see lib/hetzner.ts maxRuntimeHours)
 // plus its grace period — at this point the VM's self-destruct trap should

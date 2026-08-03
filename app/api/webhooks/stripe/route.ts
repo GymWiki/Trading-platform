@@ -4,6 +4,8 @@ import { stripe } from "@/lib/stripe";
 import { prisma } from "@/lib/prisma";
 import { withErrorHandling } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 // Stripe requires the raw request body to verify the webhook signature,
 // so this route must not run through any body-parsing middleware.
 export const POST = withErrorHandling(async (req: NextRequest) => {

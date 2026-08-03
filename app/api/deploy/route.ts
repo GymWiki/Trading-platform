@@ -7,6 +7,8 @@ import { assertCanTrade, BotBusyError } from "@/lib/bot-status";
 import { deployBotToVps } from "@/lib/deploy-bot";
 import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 const deployBodySchema = z.object({
   botId: z.string().min(1, "botId is required"),
 });

@@ -4,6 +4,8 @@ import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { withErrorHandling } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 export const DELETE = withErrorHandling(async (_req: NextRequest, { params }: { params: { id: string } }) => {
   const supabase = await createClient();
   const {

@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { deployBotToVps } from "@/lib/deploy-bot";
 import { withErrorHandling } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 // The only way PAUSED_EMERGENCY (Panic Button) or SLEEPING (Sleep Mode) is
 // ever cleared — see lib/bot-status.ts, which blocks every other code path
 // from doing it silently. Hetzner has no in-place "resume" for a stopped

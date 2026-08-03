@@ -5,6 +5,8 @@ import { decrypt } from "@/lib/encryption";
 import { fetchFreeBalance, BalanceFetchError } from "@/lib/ccxt-client";
 import { withErrorHandling } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 // Live refetch — balances aren't persisted (see ExchangeConnection in
 // prisma/schema.prisma), so both the /platforms "refresh" button and the
 // Go Live modal call this instead of trusting whatever was fetched at

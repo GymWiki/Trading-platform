@@ -9,6 +9,8 @@ import { deployBotToVps } from "@/lib/deploy-bot";
 import { botSelect, toBotDTO } from "@/lib/bot-select";
 import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 // "Je saldo op [Exchange] is te laag. Stort minimaal $50 om live te
 // handelen." — matches the amount the GoLiveModal shows the user.
 // Not exported: Next.js route files may only export handler functions

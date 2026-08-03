@@ -5,6 +5,8 @@ import { decrypt } from "@/lib/encryption";
 import { forceExitAll, stopBot, type FreqtradeCredentials } from "@/lib/freqtrade-client";
 import { withErrorHandling } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 interface PanicResult {
   botId: string;
   botName: string;

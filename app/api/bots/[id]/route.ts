@@ -6,6 +6,8 @@ import { deleteHetznerServer } from "@/lib/hetzner";
 import { botSelect, toBotDTO } from "@/lib/bot-select";
 import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 const patchBodySchema = z.object({
   trainingMode: z.enum(["LOCAL", "CLOUD"]).optional(),
   // Auto-Compounding: only flips the DB flag here — it's read fresh into

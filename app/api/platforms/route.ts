@@ -10,6 +10,8 @@ import { fetchFreeBalance } from "@/lib/ccxt-client";
 import { listPlatformsForUser } from "@/lib/platforms";
 import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 // Closed list, not free text — matches EXCHANGE_PRESETS exactly, same as
 // the bot-creation boundary (see app/api/bots/route.ts).
 const exchangeIds = EXCHANGE_PRESETS.map((e) => e.id);

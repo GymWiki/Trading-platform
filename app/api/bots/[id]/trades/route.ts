@@ -6,6 +6,8 @@ import { getTrades } from "@/lib/freqtrade-client";
 import { humanizeTrades } from "@/lib/trade-humanizer";
 import { withErrorHandling } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 const TRADE_LIMIT = 100;
 
 // Humanized Trade History: proxies this bot's own freqtrade /trades

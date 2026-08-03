@@ -4,6 +4,8 @@ import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 // A numeric Telegram chat id — negative for a group/channel, positive for
 // a direct message with the bot. `null` unlinks. Deliberately not
 // validated against the Telegram API itself (that would need a live call

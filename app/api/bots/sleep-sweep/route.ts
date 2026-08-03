@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { stopHetznerServer } from "@/lib/hetzner";
 import { withErrorHandling } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 const INACTIVITY_DAYS = 7;
 
 // Same bearer-token pattern as /api/train/cloud/reap — an external

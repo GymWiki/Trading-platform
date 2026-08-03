@@ -5,6 +5,8 @@ import { decrypt } from "@/lib/encryption";
 import { getTrades, type FreqtradeTrade } from "@/lib/freqtrade-client";
 import { withErrorHandling } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 const TRADE_LIMIT = 200;
 
 export interface PnlPoint {

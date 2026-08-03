@@ -12,6 +12,8 @@ import {
 } from "@/lib/strategy-validation";
 import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 // freqaiConfig's exact shape is validated separately by isValidFreqAIConfig
 // (see lib/strategy-validation.ts) — Zod only needs to confirm it's an
 // object here, not re-encode every nested field as a second schema.

@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { decrypt } from "@/lib/encryption";
 import { withErrorHandling } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 // Lets the owner re-view their deployed bot's freqtrade REST API
 // credentials after the one-time reveal in the POST /api/deploy response
 // has scrolled away. Same encrypt-at-rest pattern as the exchange keys.

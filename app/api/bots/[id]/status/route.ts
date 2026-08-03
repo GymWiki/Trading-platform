@@ -7,6 +7,8 @@ import { startBot, stopBot } from "@/lib/freqtrade-client";
 import { startCloudTrainingJob, TrainingBusyError } from "@/lib/train-cloud";
 import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 const MAX_MESSAGE_LENGTH = 2000;
 
 const statusBodySchema = z.object({

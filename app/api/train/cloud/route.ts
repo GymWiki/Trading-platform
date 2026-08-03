@@ -5,6 +5,8 @@ import { prisma } from "@/lib/prisma";
 import { startCloudTrainingJob, TrainingBusyError } from "@/lib/train-cloud";
 import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 const startTrainingSchema = z.object({
   botId: z.string().min(1, "botId is required"),
   cancelOpenOrders: z.boolean().optional(),

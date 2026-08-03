@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { extractBearerToken, hashCallbackToken } from "@/lib/training-token";
 import { withErrorHandling } from "@/lib/api-handler";
 
+export const dynamic = "force-dynamic";
+
 const MODELS_BUCKET = "models";
 
 // Called by the ephemeral training VM (no user session — authenticated via
