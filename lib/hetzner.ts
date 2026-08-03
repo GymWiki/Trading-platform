@@ -4,6 +4,20 @@ import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 
 const HETZNER_API_BASE = "https://api.hetzner.cloud/v1";
 
+// Every bot in this app runs FreqAI unconditionally (see the `freqai:
+// { enabled: true, ... }` block below and every preset in
+// lib/strategy-presets.ts, all of which set freqaiModel to a real model
+// like "LightGBMRegressor") — but the plain `freqtradeorg/freqtrade:stable`
+// image is built from just requirements.txt, which does NOT include
+// FreqAI's ML dependencies (scikit-learn, lightgbm, ...). Those only ship
+// in the `stable_freqai` tag (built from the separate
+// requirements-freqai.txt), or `stable_freqaitorch`/`stable_freqairl` for
+// PyTorch/RL models. Using the plain tag here would pull successfully but
+// fail the instant `backtesting --freqaimodel LightGBMRegressor` actually
+// imports lightgbm — a real, latent bug, found by checking whether this
+// project genuinely uses freqtrade's own FreqAI packaging correctly.
+const FREQTRADE_DOCKER_IMAGE = "freqtradeorg/freqtrade:stable_freqai";
+
 // Exported so lib/train-cloud.ts uses this same check instead of a second,
 // separately-maintained copy — one place to keep the error message and the
 // diagnostic logging below in sync.
@@ -597,7 +611,7 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
           `curl -fsSL "${aiModelDownloadUrl}" -o /opt/freqtrade/user_data/models/${safeBotName}-model.joblib`,
         ]
       : []),
-    `docker run -d --name ${safeBotName} --restart unless-stopped -v /opt/freqtrade/user_data:/freqtrade/user_data -p 8080:8080 freqtradeorg/freqtrade:stable trade --config /freqtrade/user_data/config.json --strategy ${strategy}`,
+    `docker run -d --name ${safeBotName} --restart unless-stopped -v /opt/freqtrade/user_data:/freqtrade/user_data -p 8080:8080 ${FREQTRADE_DOCKER_IMAGE} trade --config /freqtrade/user_data/config.json --strategy ${strategy}`,
   ];
   const runcmdYaml = runcmdSteps.map((step) => `  - ${JSON.stringify(step)}`).join("\n");
 
@@ -848,15 +862,15 @@ mkdir -p /opt/freqtrade/user_data/models
 cd /opt/freqtrade || fail "could not cd into /opt/freqtrade"
 
 report_stage "PULLING_IMAGE"
-docker pull freqtradeorg/freqtrade:stable || fail "could not pull freqtrade image"
+docker pull ${FREQTRADE_DOCKER_IMAGE} || fail "could not pull freqtrade image"
 
 report_stage "DOWNLOADING_DATA"
-docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data freqtradeorg/freqtrade:stable \\
+docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data ${FREQTRADE_DOCKER_IMAGE} \\
   download-data --config user_data/config.json --timerange "$TIMERANGE" --timeframe "${shellEscapeDouble(timeframe)}" \\
   || fail "historical data download failed"
 
 report_stage "TRAINING"
-docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data freqtradeorg/freqtrade:stable \\
+docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data ${FREQTRADE_DOCKER_IMAGE} \\
   backtesting --config user_data/config.json --strategy "$STRATEGY" \\
   --freqaimodel "$FREQAI_MODEL" --timerange "$TIMERANGE" \\
   || fail "FreqAI training (via backtesting) failed"

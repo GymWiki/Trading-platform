@@ -14,6 +14,15 @@ struct TrainingProgress {
     line: String,
 }
 
+// Every bot in this app runs FreqAI unconditionally, with a real ML model
+// (e.g. LightGBMRegressor — see lib/strategy-presets.ts) — but the plain
+// `freqtradeorg/freqtrade:stable` image is built from just requirements.txt,
+// which does not include FreqAI's ML dependencies (scikit-learn, lightgbm).
+// Those only ship in the `stable_freqai` tag (built from the separate
+// requirements-freqai.txt). Must stay in sync with FREQTRADE_DOCKER_IMAGE
+// in lib/hetzner.ts, the same fix applied there for cloud training/deploy.
+const FREQTRADE_DOCKER_IMAGE: &str = "freqtradeorg/freqtrade:stable_freqai";
+
 // Mode A (local training). Spawns FreqAI via `docker run` as a child
 // process, streams its output to the frontend as `training-progress`
 // events, and returns the path of the ONE resulting .joblib file — never a
@@ -163,7 +172,7 @@ async fn run_freqtrade_step(app: &AppHandle, bot_id: &str, work_dir: &Path, args
         "--rm".to_string(),
         "-v".to_string(),
         format!("{}:/freqtrade/user_data", work_dir.join("user_data").display()),
-        "freqtradeorg/freqtrade:stable".to_string(),
+        FREQTRADE_DOCKER_IMAGE.to_string(),
     ];
     docker_args.extend(args.iter().map(|s| s.to_string()));
 
