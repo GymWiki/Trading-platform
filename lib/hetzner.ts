@@ -126,6 +126,57 @@ interface HetznerServerResponse {
   action: { id: number; status: string };
 }
 
+// Not every server type is orderable in every location (e.g. "unsupported
+// location for server type" — a real 422 seen in production) — Hetzner's
+// own catalog is the only source of truth for that, and it isn't stable
+// enough to hardcode a snapshot of it here. `prices` on a server type is
+// keyed per-location, so its location list *is* the availability list.
+async function fetchLocationsForServerType(serverType: string, token: string): Promise<string[]> {
+  const res = await hetznerFetch(`/server_types?name=${encodeURIComponent(serverType)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Hetzner API error (${res.status}): ${await res.text()}`);
+  }
+  const { server_types } = (await res.json()) as {
+    server_types: Array<{ name: string; prices: Array<{ location: string }> }>;
+  };
+  const match = server_types.find((t) => t.name === serverType);
+  if (!match) {
+    throw new Error(`Hetzner server type "${serverType}" does not exist`);
+  }
+  return match.prices.map((p) => p.location);
+}
+
+// Validates the configured HETZNER_LOCATION against this server type's real
+// availability before ever attempting to create anything, and picks a
+// working fallback instead of letting a stale/mismatched env var 422 on
+// every single deploy or training run. Best-effort: if the lookup itself
+// fails (network hiccup, rate limit), falls through to the preferred
+// location unchanged — the create call's own 422 handling below is the
+// last line of defense in that case.
+async function resolveServerLocation(serverType: string, preferredLocation: string, token: string): Promise<string> {
+  let availableLocations: string[];
+  try {
+    availableLocations = await fetchLocationsForServerType(serverType, token);
+  } catch (err) {
+    console.error(`[hetzner] Could not look up available locations for server type "${serverType}":`, err);
+    return preferredLocation;
+  }
+  if (availableLocations.length === 0) {
+    throw new Error(`Hetzner server type "${serverType}" is not currently orderable in any location`);
+  }
+  if (availableLocations.includes(preferredLocation)) {
+    return preferredLocation;
+  }
+  const fallback = availableLocations[0];
+  console.warn(
+    `[hetzner] HETZNER_LOCATION "${preferredLocation}" does not support server type "${serverType}" — ` +
+      `using "${fallback}" instead. Available for this type: ${availableLocations.join(", ")}.`,
+  );
+  return fallback;
+}
+
 export async function createHetznerServer({
   name,
   cloudInit,
@@ -135,6 +186,10 @@ export async function createHetznerServer({
   const token = requireHetznerToken();
   const firewallId = firewallProfile ? await ensureFirewall(firewallProfile) : undefined;
 
+  const resolvedServerType = serverType || process.env.HETZNER_SERVER_TYPE || "cx11";
+  const preferredLocation = process.env.HETZNER_LOCATION || "nbg1";
+  const location = await resolveServerLocation(resolvedServerType, preferredLocation, token);
+
   const res = await hetznerFetch(`/servers`, {
     method: "POST",
     headers: {
@@ -143,9 +198,9 @@ export async function createHetznerServer({
     },
     body: JSON.stringify({
       name,
-      server_type: serverType || process.env.HETZNER_SERVER_TYPE || "cx11",
+      server_type: resolvedServerType,
       image: process.env.HETZNER_IMAGE || "ubuntu-24.04",
-      location: process.env.HETZNER_LOCATION || "nbg1",
+      location,
       user_data: cloudInit,
       ssh_keys: process.env.HETZNER_SSH_KEY_ID ? [process.env.HETZNER_SSH_KEY_ID] : undefined,
       firewalls: firewallId ? [{ firewall: firewallId }] : undefined,
@@ -155,6 +210,20 @@ export async function createHetznerServer({
 
   if (!res.ok) {
     const errorBody = await res.text();
+    // Translate the specific "type not orderable in this location" 422
+    // into something actionable instead of raw Hetzner JSON — this can
+    // still happen even after resolveServerLocation above (e.g. the
+    // lookup itself failed and fell through, or Hetzner's catalog changed
+    // mid-request), so it's a real fallback, not dead code.
+    if (res.status === 422 && errorBody.includes("unsupported location for server type")) {
+      const validLocations = await fetchLocationsForServerType(resolvedServerType, token).catch(() => []);
+      throw new Error(
+        `Serverlocatie "${location}" ondersteunt geen "${resolvedServerType}"-servers.` +
+          (validLocations.length > 0
+            ? ` Beschikbare locaties voor dit type: ${validLocations.join(", ")}. Zet HETZNER_LOCATION in Vercel op een van deze waardes.`
+            : " Kon geen beschikbare locaties ophalen bij Hetzner — probeer het later opnieuw."),
+      );
+    }
     throw new Error(`Hetzner API error (${res.status}): ${errorBody}`);
   }
 
