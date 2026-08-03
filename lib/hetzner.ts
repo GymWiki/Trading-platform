@@ -328,6 +328,19 @@ function writeFilesBlock(entries: Array<{ path: string; content: string; permiss
 }
 
 const STAKE_CURRENCY = "USDT";
+
+// FreqAI's own JSON schema (freqtrade/config_schema/config_schema.py) marks
+// feature_parameters.include_corr_pairlist as required, alongside
+// include_timeframes — every strategy preset implements
+// feature_engineering_expand_all/_basic, which FreqAI calls once per entry
+// here, so an empty list would just mean zero correlation features, but a
+// MISSING key fails config validation outright before training/trading ever
+// starts ("'include_corr_pairlist' is a required property"). BTC is the
+// de-facto market-wide benchmark regardless of which pairs a given bot
+// trades, and FreqAIFeatureConfig has no per-bot choice of its own here, so
+// this is a fixed platform default rather than something derived per-bot.
+const DEFAULT_CORR_PAIRLIST = [`BTC/${STAKE_CURRENCY}`];
+
 // How many of the exchange's top-liquid USDT markets VolumePairList hands
 // to FreqAI when auto-select is on — wide enough for the AI to find real
 // opportunities, small enough that feature engineering/backtesting for a
@@ -560,6 +573,7 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
           live_retrain_hours: freqaiConfig.training.liveRetrainHours,
           feature_parameters: {
             include_timeframes: freqaiConfig.features.includeTimeframes,
+            include_corr_pairlist: DEFAULT_CORR_PAIRLIST,
             indicator_periods_candles: freqaiConfig.features.indicatorPeriods,
           },
           data_split_parameters: { test_size: 0.25 },
@@ -736,6 +750,24 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
   const timeframe = freqaiConfig.features.baseTimeframe;
   const pairlistConfig = buildPairlistConfig(autoSelectCoins, pairWhitelist);
 
+  // download-data only fetches config["pairs"], which freqtrade defaults to
+  // exchange.pair_whitelist when no --pairs override is given (see
+  // configuration.py's _process_datacli_options). In manual/static mode that
+  // whitelist is exactly whatever pairs the user picked to TRADE — it has no
+  // reason to include DEFAULT_CORR_PAIRLIST's BTC/USDT unless the user
+  // happened to pick it. Every strategy preset implements
+  // feature_engineering_expand_all/_basic, so FreqAI really does try to
+  // build correlation features from it — without this, training would swap
+  // the schema error for a "missing candle data for BTC/USDT" one instead.
+  // Passed via an explicit --pairs override below so this never affects
+  // pair_whitelist/pairlists itself (i.e. never makes the bot actually
+  // trade BTC/USDT it wasn't configured for) — just what gets downloaded.
+  // Auto-select's pair_whitelist is already the regex ".*/USDT", which
+  // freqtrade expands against the exchange's real markets the same way for
+  // both config-implied and --pairs-supplied entries, so BTC/USDT is
+  // already included there; the union+dedup below is a no-op in that case.
+  const downloadDataPairs = Array.from(new Set([...pairlistConfig.pair_whitelist, ...DEFAULT_CORR_PAIRLIST]));
+
   const today = new Date();
   const start = new Date(today.getTime() - timerangeDays * 24 * 60 * 60 * 1000);
   const fmt = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, "");
@@ -779,6 +811,7 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
       live_retrain_hours: freqaiConfig.training.liveRetrainHours,
       feature_parameters: {
         include_timeframes: freqaiConfig.features.includeTimeframes,
+        include_corr_pairlist: DEFAULT_CORR_PAIRLIST,
         indicator_periods_candles: freqaiConfig.features.indicatorPeriods,
       },
       data_split_parameters: { test_size: 0.25 },
@@ -892,6 +925,7 @@ docker pull ${FREQTRADE_DOCKER_IMAGE} 2>&1 | tee -a "$TRAIN_LOG" || fail "could 
 report_stage "DOWNLOADING_DATA"
 docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data ${FREQTRADE_DOCKER_IMAGE} \\
   download-data --config user_data/config.json --timerange "$TIMERANGE" --timeframe "${shellEscapeDouble(timeframe)}" \\
+  --pairs ${downloadDataPairs.map((p) => `"${shellEscapeDouble(p)}"`).join(" ")} \\
   2>&1 | tee -a "$TRAIN_LOG" || fail "historical data download failed"
 
 report_stage "TRAINING"

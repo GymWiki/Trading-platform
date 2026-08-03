@@ -70,7 +70,14 @@ async fn train_local_model(
     // by 24h volume) instead of requiring the user to have typed a manual
     // list — local training should behave identically to cloud training,
     // not silently fall back to a stricter rule.
-    let (pair_whitelist_value, pairlists_value) = if auto_select_coins {
+    // FreqAI's own JSON schema requires feature_parameters.include_corr_pairlist
+    // (alongside include_timeframes) — must stay in sync with
+    // DEFAULT_CORR_PAIRLIST in lib/hetzner.ts, the same fix applied there
+    // after cloud training failed with "'include_corr_pairlist' is a
+    // required property". BTC/USDT is the fixed platform-wide default.
+    const CORR_PAIR: &str = "BTC/USDT";
+
+    let (pair_whitelist_value, pairlists_value, download_data_pairs) = if auto_select_coins {
         (
             serde_json::json!([".*/USDT"]),
             serde_json::json!([{
@@ -80,6 +87,7 @@ async fn train_local_model(
                 "min_value": 0,
                 "refresh_period": 1800,
             }]),
+            vec![".*/USDT".to_string(), CORR_PAIR.to_string()],
         )
     } else {
         let pairs: Vec<String> = pair_whitelist
@@ -90,7 +98,25 @@ async fn train_local_model(
         if pairs.is_empty() {
             return Err("pairWhitelist must contain at least one pair when auto-select is off".into());
         }
-        (serde_json::json!(pairs), serde_json::json!([{ "method": "StaticPairList" }]))
+        // download-data needs BTC/USDT's own OHLCV history too — every
+        // strategy preset implements feature_engineering_expand_all/_basic,
+        // so FreqAI really does build correlation features from
+        // include_corr_pairlist, but downloading only happens for
+        // config["pairs"] (== exchange.pair_whitelist here), which is just
+        // the user's own manually chosen trading pairs and has no reason to
+        // include BTC/USDT. Passed via an explicit --pairs override below so
+        // this never adds BTC/USDT to pair_whitelist/pairlists itself (i.e.
+        // never makes the bot actually trade it unrequested) — just what
+        // gets downloaded.
+        let mut download_pairs = pairs.clone();
+        if !download_pairs.iter().any(|p| p == CORR_PAIR) {
+            download_pairs.push(CORR_PAIR.to_string());
+        }
+        (
+            serde_json::json!(pairs),
+            serde_json::json!([{ "method": "StaticPairList" }]),
+            download_pairs,
+        )
     };
 
     let config = serde_json::json!({
@@ -111,7 +137,7 @@ async fn train_local_model(
             "identifier": format!("{bot_id}-model"),
             "train_period_days": 30,
             "backtest_period_days": 7,
-            "feature_parameters": { "include_timeframes": ["5m"] },
+            "feature_parameters": { "include_timeframes": ["5m"], "include_corr_pairlist": [CORR_PAIR] },
             "data_split_parameters": { "test_size": 0.25 }
         }
     });
@@ -119,13 +145,10 @@ async fn train_local_model(
     std::fs::write(user_data_dir.join("config.json"), config_json)
         .map_err(|e| format!("could not write config.json: {e}"))?;
 
-    run_freqtrade_step(
-        &app,
-        &bot_id,
-        &work_dir,
-        &["download-data", "--config", "user_data/config.json", "--timeframe", "5m"],
-    )
-    .await?;
+    let mut download_data_args: Vec<&str> =
+        vec!["download-data", "--config", "user_data/config.json", "--timeframe", "5m", "--pairs"];
+    download_data_args.extend(download_data_pairs.iter().map(|p| p.as_str()));
+    run_freqtrade_step(&app, &bot_id, &work_dir, &download_data_args).await?;
 
     run_freqtrade_step(
         &app,
