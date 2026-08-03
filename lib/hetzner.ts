@@ -4,9 +4,24 @@ import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 
 const HETZNER_API_BASE = "https://api.hetzner.cloud/v1";
 
-function requireHetznerToken(): string {
+// Exported so lib/train-cloud.ts uses this same check instead of a second,
+// separately-maintained copy — one place to keep the error message and the
+// diagnostic logging below in sync.
+export function requireHetznerToken(): string {
   const token = process.env.HETZNER_API_TOKEN;
   if (!token) {
+    // Never log the token itself — only which HETZNER_* names Vercel
+    // actually injected into this invocation, so a typo'd or
+    // wrong-environment (Preview vs Production) var name shows up
+    // server-side (Vercel function logs) without leaking any value.
+    const hetznerKeysPresent = Object.keys(process.env)
+      .filter((key) => key.startsWith("HETZNER"))
+      .sort();
+    console.error(
+      `[lib/hetzner.ts] HETZNER_API_TOKEN is missing. HETZNER_* env vars present in this runtime: ${
+        hetznerKeysPresent.length > 0 ? hetznerKeysPresent.join(", ") : "(none)"
+      }`,
+    );
     throw new Error(
       "HETZNER_API_TOKEN is not set (checked in lib/hetzner.ts, requireHetznerToken()) — " +
         "set it in the Vercel project's Environment Variables before provisioning, stopping, or deleting a VPS.",

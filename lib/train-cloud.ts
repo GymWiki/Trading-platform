@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { decrypt } from "@/lib/encryption";
-import { buildFreqAITrainingCloudInit, createHetznerServer } from "@/lib/hetzner";
+import { buildFreqAITrainingCloudInit, createHetznerServer, requireHetznerToken } from "@/lib/hetzner";
 import { DEFAULT_PAPER_TOTAL_BUDGET, DEFAULT_PAPER_MAX_STAKE_PERCENTAGE } from "@/lib/paper-trading-defaults";
 import { generateCallbackToken, hashCallbackToken } from "@/lib/training-token";
 import { stopBot, forceExitAll } from "@/lib/freqtrade-client";
@@ -39,13 +39,11 @@ export async function startCloudTrainingJob({ bot, cancelOpenOrders = false }: S
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   if (!appUrl) throw new Error("NEXT_PUBLIC_APP_URL is not configured");
-  const hetznerApiToken = process.env.HETZNER_API_TOKEN;
-  if (!hetznerApiToken) {
-    throw new Error(
-      "HETZNER_API_TOKEN is not set (checked in lib/train-cloud.ts, startCloudTrainingJob()) — " +
-        "set it in the Vercel project's Environment Variables before starting a cloud training job.",
-    );
-  }
+  // Was a second, separately-maintained copy of this exact check — now the
+  // one in lib/hetzner.ts (which also logs which HETZNER_* env vars are
+  // actually present, server-side only, when this throws) so there's a
+  // single place to keep the error message and diagnostics in sync.
+  const hetznerApiToken = requireHetznerToken();
 
   // Priority rule: training/updating always wins over active trading
   // (paper or live), and the pause must be real, not just a status label —
