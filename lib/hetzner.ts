@@ -805,6 +805,16 @@ FREQAI_MODEL="${shellEscapeDouble(freqaiConfig.freqaiModel)}"
 TIMERANGE="${shellEscapeDouble(timerange)}"
 
 REPORTED=0
+FAIL_REASON=""
+# Every docker/freqtrade command's own stdout+stderr goes here (see the
+# "2>&1 | tee -a" on each one below) so fail() can attach the actual
+# output — the specific reason "FreqAI training (via backtesting) failed"
+# alone never explains (OOM, a bad strategy, a config error, ...) — to
+# whatever it reports. Without this, self_destruct's fallback report was
+# the ONLY thing ever reaching us: a bare "exited unexpectedly (exit code
+# 1)" no matter which command actually failed or why.
+TRAIN_LOG="/var/log/freqtrade-train.log"
+: > "$TRAIN_LOG"
 
 report_status() {
   local status="$1"
@@ -842,7 +852,14 @@ report_stage() {
 self_destruct() {
   local exit_code=$?
   if [ "$REPORTED" -eq 0 ]; then
-    report_status "FAILED" "Training script exited unexpectedly (exit code $exit_code)"
+    # FAIL_REASON (set by fail() below) carries both which command failed
+    # AND the tail of its actual output — a bare exit code alone never
+    # explained anything real (OOM, a bad strategy, a data/config error).
+    # Only falls back to the generic message for a crash that never went
+    # through fail() at all (an unset-variable error under "set -u", a
+    # signal from the timeout wrapper, ...).
+    local reason="\${FAIL_REASON:-Training script exited unexpectedly (exit code $exit_code)}"
+    report_status "FAILED" "$reason"
   fi
   local server_id
   server_id=$(curl -fsS -m 10 -H "Metadata: true" http://169.254.169.254/hetzner/v1/metadata/instance-id || echo "")
@@ -854,7 +871,15 @@ self_destruct() {
 trap self_destruct EXIT
 
 fail() {
-  echo "TRAINING FAILED: $1" >&2
+  local msg="$1"
+  echo "TRAINING FAILED: $msg" >&2
+  local log_tail
+  log_tail=$(tail -c 1500 "$TRAIN_LOG" 2>/dev/null || echo "")
+  if [ -n "$log_tail" ]; then
+    FAIL_REASON="$msg | last output: $log_tail"
+  else
+    FAIL_REASON="$msg"
+  fi
   exit 1
 }
 
@@ -862,18 +887,18 @@ mkdir -p /opt/freqtrade/user_data/models
 cd /opt/freqtrade || fail "could not cd into /opt/freqtrade"
 
 report_stage "PULLING_IMAGE"
-docker pull ${FREQTRADE_DOCKER_IMAGE} || fail "could not pull freqtrade image"
+docker pull ${FREQTRADE_DOCKER_IMAGE} 2>&1 | tee -a "$TRAIN_LOG" || fail "could not pull freqtrade image"
 
 report_stage "DOWNLOADING_DATA"
 docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data ${FREQTRADE_DOCKER_IMAGE} \\
   download-data --config user_data/config.json --timerange "$TIMERANGE" --timeframe "${shellEscapeDouble(timeframe)}" \\
-  || fail "historical data download failed"
+  2>&1 | tee -a "$TRAIN_LOG" || fail "historical data download failed"
 
 report_stage "TRAINING"
 docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data ${FREQTRADE_DOCKER_IMAGE} \\
   backtesting --config user_data/config.json --strategy "$STRATEGY" \\
   --freqaimodel "$FREQAI_MODEL" --timerange "$TIMERANGE" \\
-  || fail "FreqAI training (via backtesting) failed"
+  2>&1 | tee -a "$TRAIN_LOG" || fail "FreqAI training (via backtesting) failed"
 
 MODEL_COUNT=$(find user_data/models -name '*.joblib' 2>/dev/null | wc -l)
 if [ "$MODEL_COUNT" -ne 1 ]; then
