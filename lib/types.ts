@@ -13,7 +13,8 @@ export type BotStatus =
   | "UPDATING_MODEL"
   | "ERROR"
   | "PAUSED_EMERGENCY"
-  | "SLEEPING";
+  | "SLEEPING"
+  | "PAUSED_MANUAL";
 
 export interface TrainingJobDTO {
   id: string;

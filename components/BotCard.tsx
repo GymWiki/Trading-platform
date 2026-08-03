@@ -17,6 +17,7 @@ import {
   AlertOctagon,
   Moon,
   PlayCircle,
+  PauseCircle,
   Link2,
   ShieldCheck,
   ShieldAlert,
@@ -56,6 +57,7 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   const [isTogglingAutoCompound, setIsTogglingAutoCompound] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [isConnectExchangeOpen, setIsConnectExchangeOpen] = useState(false);
   const [isDisconnectingExchange, setIsDisconnectingExchange] = useState(false);
   // Only set once the start-cloud-training call actually succeeds (not on
@@ -86,7 +88,11 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
 
   const jobActive = bot.latestTrainingJob?.status === "QUEUED" || bot.latestTrainingJob?.status === "TRAINING";
   const canGoLive = bot.status === "TRAINING_PAPER_TRADE" && bot.deploymentStatus === "VPS_ACTIVE";
-  const isPaused = bot.status === "PAUSED_EMERGENCY" || bot.status === "SLEEPING";
+  const isPaused = bot.status === "PAUSED_EMERGENCY" || bot.status === "SLEEPING" || bot.status === "PAUSED_MANUAL";
+  // Only this bot's own, currently-running trading loop can be stopped —
+  // matches exactly what POST /api/bots/[id]/stop itself requires.
+  const canStop =
+    bot.deploymentStatus === "VPS_ACTIVE" && (bot.status === "TRAINING_PAPER_TRADE" || bot.status === "LIVE_TRADING");
 
   useEffect(() => {
     return () => {
@@ -94,8 +100,9 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
     };
   }, []);
 
-  // Clears PAUSED_EMERGENCY (Panic Button) or SLEEPING (Sleep Mode) — the
-  // only place either status is ever cleared, see app/api/bots/[id]/resume.
+  // Clears PAUSED_EMERGENCY (Panic Button), SLEEPING (Sleep Mode), or
+  // PAUSED_MANUAL (Stop bot, below) — the only place any of the three is
+  // ever cleared, see app/api/bots/[id]/resume.
   async function handleResume() {
     setError(null);
     setIsResuming(true);
@@ -106,6 +113,32 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
       setError(toErrorMessage(err, "Hervatten is mislukt"));
     } finally {
       setIsResuming(false);
+    }
+  }
+
+  // Stops just this bot — no new positions open, existing ones keep
+  // running untouched (see app/api/bots/[id]/stop for the exact
+  // guarantee). Deliberately a plain confirm(), matching the weight
+  // handleDisconnectExchange already uses for a reversible single-bot
+  // action, unlike the heavier custom modal the global Panic Button (a
+  // real-money, force-close action across every bot) warrants.
+  async function handleStop() {
+    if (
+      !confirm(
+        `${bot.botName} stoppen? Er worden geen nieuwe posities meer geopend — bestaande open posities blijven gewoon lopen. Je kan de bot daarna weer hervatten.`,
+      )
+    ) {
+      return;
+    }
+    setError(null);
+    setIsStopping(true);
+    try {
+      const data = await apiFetch<{ bot: BotConfigurationDTO }>(`/api/bots/${bot.id}/stop`, { method: "POST" });
+      onUpdate(data.bot);
+    } catch (err) {
+      setError(toErrorMessage(err, "Stoppen is mislukt"));
+    } finally {
+      setIsStopping(false);
     }
   }
 
@@ -365,7 +398,20 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
             <p className="mt-0.5 text-[11px] text-slate-500">Paper trading — nog geen live budget ingesteld</p>
           )}
         </div>
-        <StatusBadge status={bot.deploymentStatus} />
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+          <StatusBadge status={bot.deploymentStatus} />
+          {canStop && (
+            <button
+              type="button"
+              onClick={handleStop}
+              disabled={isStopping}
+              className="flex items-center gap-1 rounded-md border border-amber-500/40 px-2 py-1 text-[11px] font-medium text-amber-400 transition hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isStopping ? <Loader2 className="h-3 w-3 animate-spin" /> : <PauseCircle className="h-3 w-3" />}
+              Stop bot
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex items-center justify-between gap-3 rounded-lg bg-background px-3 py-2">
@@ -455,10 +501,16 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
           <div className="flex items-center gap-1.5 font-medium text-amber-300">
             {bot.status === "PAUSED_EMERGENCY" ? (
               <AlertOctagon className="h-3.5 w-3.5 shrink-0" />
-            ) : (
+            ) : bot.status === "SLEEPING" ? (
               <Moon className="h-3.5 w-3.5 shrink-0" />
+            ) : (
+              <PauseCircle className="h-3.5 w-3.5 shrink-0" />
             )}
-            {bot.status === "PAUSED_EMERGENCY" ? "Noodstop actief" : "In slaapstand — even geen activiteit"}
+            {bot.status === "PAUSED_EMERGENCY"
+              ? "Noodstop actief"
+              : bot.status === "SLEEPING"
+                ? "In slaapstand — even geen activiteit"
+                : "Gestopt — bestaande posities blijven gewoon lopen"}
           </div>
           {bot.lastError && <p className="text-amber-200/80">{bot.lastError}</p>}
           <button
@@ -475,15 +527,20 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
 
       <div
         className={`flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs font-medium ${
-          bot.isPaperTrading
-            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
-            : "border-red-500/40 bg-red-500/10 text-red-300"
+          bot.status === "PAUSED_MANUAL"
+            ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+            : bot.isPaperTrading
+              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+              : "border-red-500/40 bg-red-500/10 text-red-300"
         }`}
       >
         {/* isPaperTrading (not bot.status) drives this label — status now
             also covers pause states (PAUSED_EMERGENCY/SLEEPING) that don't
-            imply a mode switch, so it can't double as "which mode" here. */}
-        <span>{bot.isPaperTrading ? "Paper Trading" : "Live Trading"}</span>
+            imply a mode switch, so it can't double as "which mode" there.
+            PAUSED_MANUAL is the one exception: the user explicitly asked
+            this pill itself to read "Gestopt" instead of "Paper Trading"/
+            "Live Trading" while a bot is individually stopped. */}
+        <span>{bot.status === "PAUSED_MANUAL" ? "Gestopt" : bot.isPaperTrading ? "Paper Trading" : "Live Trading"}</span>
         {canGoLive && (
           <button
             type="button"

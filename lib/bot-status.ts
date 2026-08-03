@@ -14,18 +14,21 @@ export type BotStatus =
   | "UPDATING_MODEL"
   | "ERROR"
   | "PAUSED_EMERGENCY"
-  | "SLEEPING";
+  | "SLEEPING"
+  | "PAUSED_MANUAL";
 
-// PAUSED_EMERGENCY and SLEEPING are just as blocking as TRAINING/
-// UPDATING_MODEL: nothing (a retrain completing, a redeploy, Go Live)
-// should ever silently resume a bot the user panic-stopped or that Sleep
-// Mode paused for inactivity. Only POST /api/bots/[id]/resume — a
-// deliberate user action — clears either one.
+// PAUSED_EMERGENCY, SLEEPING, and PAUSED_MANUAL are just as blocking as
+// TRAINING/UPDATING_MODEL: nothing (a retrain completing, a redeploy, Go
+// Live) should ever silently resume a bot the user panic-stopped, that
+// Sleep Mode paused for inactivity, or that the user individually stopped
+// via POST /api/bots/[id]/stop. Only POST /api/bots/[id]/resume — a
+// deliberate user action — clears any of the three.
 const TRADING_BLOCKED_STATUSES: ReadonlySet<BotStatus> = new Set([
   "TRAINING",
   "UPDATING_MODEL",
   "PAUSED_EMERGENCY",
   "SLEEPING",
+  "PAUSED_MANUAL",
 ]);
 
 export class BotBusyError extends Error {

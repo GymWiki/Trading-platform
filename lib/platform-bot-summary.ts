@@ -37,6 +37,8 @@ function describeBotStatus(bot: BotConfigurationDTO): string {
       return "Noodstop actief — alle posities zijn gesloten.";
     case "SLEEPING":
       return "In slaapstand na een periode zonder activiteit.";
+    case "PAUSED_MANUAL":
+      return "Gestopt — geen nieuwe posities, bestaande posities blijven gewoon lopen.";
     case "ERROR":
       return bot.lastError ?? "Er ging iets mis — bekijk de details in het dashboard.";
     case "LIVE_TRADING":

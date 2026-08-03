@@ -133,6 +133,15 @@ enum TrainingStage {
 //                         inactivity) — the Hetzner Docker container is
 //                         stopped (not deleted) to save cost. Resumed the
 //                         same way as PAUSED_EMERGENCY.
+//   PAUSED_MANUAL           the user hit "Stop bot" for this one bot (POST
+//                         /api/bots/[id]/stop) — only the trading loop is
+//                         halted via the same stopBot() call the Panic
+//                         Button uses; open positions are deliberately
+//                         left alone (only Panic force-closes). Unlike
+//                         PAUSED_EMERGENCY/SLEEPING, the VPS itself was
+//                         never touched, so POST /api/bots/[id]/resume
+//                         takes a lightweight path back (just startBot())
+//                         instead of a full redeploy.
 enum BotStatus {
   TRAINING_PAPER_TRADE
   TRAINING
@@ -141,6 +150,7 @@ enum BotStatus {
   ERROR
   PAUSED_EMERGENCY
   SLEEPING
+  PAUSED_MANUAL
 
   @@map("bot_status")
 }
