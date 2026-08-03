@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { Bot } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { SignInButton, SignOutButton } from "@/components/AuthButtons";
 import { BottomNav } from "@/components/BottomNav";
@@ -14,12 +13,14 @@ export async function Navbar() {
     <>
       <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur">
         <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
-          <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
-            <Bot className="h-6 w-6 shrink-0 text-primary" />
-            {/* Full name only where there's room — BottomNav (mobile) and
-                these same three destinations, so nothing is lost by hiding
-                the wordmark, just the branding is compacted. */}
-            <span className="hidden sm:inline">Freqtrade Command Center</span>
+          <Link href="/" className="flex items-center gap-2">
+            <span className="text-2xl leading-none">🐼</span>
+            {/* Full wordmark only where there's room — BottomNav (mobile)
+                and these same three destinations, so nothing is lost by
+                hiding it, just the branding is compacted. */}
+            <span className="hidden font-display font-semibold tracking-tight text-slate-100 sm:inline">
+              FreqPanda
+            </span>
           </Link>
           <div className="flex items-center gap-3 sm:gap-4">
             {user ? (
@@ -41,9 +42,9 @@ export async function Navbar() {
                 </Link>
                 <Link
                   href="/dashboard"
-                  className="hidden rounded-lg bg-primary px-4 py-2 text-sm font-medium text-background transition hover:bg-primary-hover md:inline-block"
+                  className="hidden rounded-full bg-primary px-4 py-2 text-sm font-semibold text-background transition hover:bg-primary-hover md:inline-block"
                 >
-                  Go to Dashboard
+                  Naar dashboard
                 </Link>
                 <SignOutButton />
               </>

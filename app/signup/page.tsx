@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
-import { Bot, CheckCircle2, Loader2, Lock, Mail, User } from "lucide-react";
+import { CheckCircle2, Loader2, Lock, Mail, User } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
 export default function SignupPage() {
@@ -82,9 +82,9 @@ export default function SignupPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-6 py-12">
       <div className="w-full max-w-sm">
-        <Link href="/" className="mb-8 flex items-center justify-center gap-2 font-semibold tracking-tight">
-          <Bot className="h-6 w-6 text-primary" />
-          <span>Freqtrade Command Center</span>
+        <Link href="/" className="mb-8 flex items-center justify-center gap-2">
+          <span className="text-2xl leading-none">🐼</span>
+          <span className="font-display font-semibold tracking-tight">FreqPanda</span>
         </Link>
 
         <div className="card-surface p-6">

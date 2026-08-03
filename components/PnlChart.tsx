@@ -10,8 +10,8 @@ interface PnlPoint {
   cumulativeProfit: number;
 }
 
-const POSITIVE = "#34d399"; // Tailwind emerald-400 — same hue this app already uses everywhere for "profit" (TradeHistoryFeed, PlatformCard)
-const NEGATIVE = "#f87171"; // Tailwind red-400 — same hue this app already uses for "loss"
+const POSITIVE = "#7CC576"; // panda.bamboo — same "profit" green app/platform's PortfolioCard sparkline uses
+const NEGATIVE = "#E5484D"; // panda.panic
 
 function formatUsd(value: number): string {
   const sign = value >= 0 ? "+" : "";
@@ -24,7 +24,7 @@ function CustomTooltip({ active, payload, label }: { active?: boolean; payload?:
   return (
     <div className="rounded-lg border border-border bg-surface px-3 py-2 text-xs shadow-lg">
       <p className="text-slate-500">{new Date(label).toLocaleDateString("nl-NL", { day: "numeric", month: "short", year: "numeric" })}</p>
-      <p className={`font-semibold ${value >= 0 ? "text-emerald-400" : "text-red-400"}`}>{formatUsd(value)}</p>
+      <p className={`font-semibold ${value >= 0 ? "text-primary" : "text-red-400"}`}>{formatUsd(value)}</p>
     </div>
   );
 }
@@ -87,7 +87,7 @@ export function PnlChart() {
           <TrendingUp className="h-3.5 w-3.5" />
           Portfolio-winst (alle bots)
         </div>
-        <span className={`text-xl font-semibold ${isPositive ? "text-emerald-400" : "text-red-400"}`}>
+        <span className={`text-xl font-semibold ${isPositive ? "text-primary" : "text-red-400"}`}>
           {formatUsd(totalProfit)}
         </span>
       </div>
@@ -103,12 +103,12 @@ export function PnlChart() {
           <XAxis
             dataKey="date"
             tickFormatter={(v: string) => new Date(v).toLocaleDateString("nl-NL", { day: "numeric", month: "short" })}
-            tick={{ fill: "#64748b", fontSize: 11 }}
-            axisLine={{ stroke: "#232b3a" }}
+            tick={{ fill: "#8A93A3", fontSize: 11 }}
+            axisLine={{ stroke: "#272E38" }}
             tickLine={false}
             minTickGap={40}
           />
-          <Tooltip content={<CustomTooltip />} cursor={{ stroke: "#232b3a", strokeWidth: 1 }} />
+          <Tooltip content={<CustomTooltip />} cursor={{ stroke: "#272E38", strokeWidth: 1 }} />
           <Area
             type="monotone"
             dataKey="cumulativeProfit"
@@ -116,7 +116,7 @@ export function PnlChart() {
             strokeWidth={2}
             fill={`url(#${gradientId})`}
             dot={false}
-            activeDot={{ r: 4, fill: color, stroke: "#0a0e14", strokeWidth: 2 }}
+            activeDot={{ r: 4, fill: color, stroke: "#14171C", strokeWidth: 2 }}
           />
         </AreaChart>
       </ResponsiveContainer>

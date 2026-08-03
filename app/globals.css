@@ -3,8 +3,13 @@
 @tailwind utilities;
 
 :root {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  /* Fallback names only — the real font files are loaded via next/font in
+     app/layout.tsx (and, page-scoped, app/page.tsx + app/platform), which
+     sets these same variable names to Manrope/Space Grotesk/IBM Plex Mono
+     with higher specificity than this :root block. */
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
 
 body {
@@ -15,16 +20,28 @@ body {
   @apply bg-primary/30 text-white;
 }
 
+/* FreqPanda's display face carries every heading site-wide — set once
+   here instead of adding a font-display className to every <h1-3> across
+   the app. Utility classes on a specific element (e.g. app/platform's
+   explicit font-panda-display) still win over this via normal specificity. */
+@layer base {
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display), var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  }
+}
+
 /* Components go in Tailwind's "components" layer so utility classes used
    alongside them (e.g. `pl-9` on top of `.input`'s own `px-3`) always win
    the cascade, regardless of where this file places them relative to the
    `@tailwind utilities` import. */
 @layer components {
   .card-surface {
-    @apply bg-surface border border-border rounded-xl;
+    @apply bg-surface border border-border rounded-2xl;
   }
 
   .input {
-    @apply w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-primary;
+    @apply w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-primary;
   }
 }

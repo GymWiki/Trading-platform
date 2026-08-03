@@ -1,9 +1,14 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Manrope, Space_Grotesk, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 
-const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
-const jetbrainsMono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono" });
+// The same FreqPanda type stack app/platform and the landing page
+// introduced (Space Grotesk display, Manrope body, IBM Plex Mono
+// data/labels) — now loaded app-wide so the rest of the app (dashboard,
+// platforms, settings, login, signup) matches instead of staying on Inter.
+const bodyFont = Manrope({ subsets: ["latin"], variable: "--font-sans" });
+const displayFont = Space_Grotesk({ subsets: ["latin"], variable: "--font-display" });
+const monoFont = IBM_Plex_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-mono" });
 
 // Resolves any relative URL used elsewhere in the Metadata API (OG images,
 // canonical links) against the real production domain instead of Next.js's
@@ -18,7 +23,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`}>
+    <html lang="en" className={`${bodyFont.variable} ${displayFont.variable} ${monoFont.variable}`}>
       <body className="min-h-screen font-sans antialiased">{children}</body>
     </html>
   );

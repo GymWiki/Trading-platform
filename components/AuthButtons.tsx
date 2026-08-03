@@ -9,9 +9,9 @@ export function SignInButton() {
   return (
     <Link
       href="/login"
-      className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-slate-200 transition hover:border-primary hover:text-primary"
+      className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-background transition hover:bg-primary-hover"
     >
-      Sign in
+      Inloggen
     </Link>
   );
 }
@@ -45,10 +45,10 @@ export function SignOutButton({ className }: { className?: string }) {
       disabled={isSigningOut}
       className={
         className ??
-        "rounded-lg border border-border px-4 py-2 text-sm font-medium text-slate-400 transition hover:border-red-500/50 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50"
+        "rounded-full border border-border px-4 py-2 text-sm font-medium text-slate-400 transition hover:border-red-500/50 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50"
       }
     >
-      Sign out
+      Uitloggen
     </button>
   );
 }
