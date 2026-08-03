@@ -51,7 +51,18 @@ export async function startCloudTrainingJob({ bot, cancelOpenOrders = false }: S
   // credentials. deployBotToVps derives the resume status from
   // isPaperTrading, so whichever phase this was in is exactly what it
   // resumes to.
-  const wasDeployed = bot.status === "TRAINING_PAPER_TRADE" || bot.status === "LIVE_TRADING";
+  //
+  // deploymentStatus, not status: TRAINING_PAPER_TRADE is this bot's
+  // status from the moment it's *created*, not just while it's actually
+  // running on a VPS — a bot that has never been deployed is also
+  // TRAINING_PAPER_TRADE, but has no server to pause and no freqtrade
+  // REST API credentials to pause it with. Checking bot.status here
+  // treated every brand-new bot as "already deployed", so its very first
+  // Start Cloud Training click always hit the credentials check below and
+  // failed — nothing to do with the bot's own exchange account (see
+  // lib/deploy-bot.ts for that, separate, gate). VPS_ACTIVE is the actual
+  // "is there a running deployment to pause" signal.
+  const wasDeployed = bot.deploymentStatus === "VPS_ACTIVE";
   if (wasDeployed) {
     if (!bot.hetznerServerIp || !bot.apiServerUsername || !bot.apiServerPassword) {
       throw new Error(`Bot is ${bot.status} but has no reachable API credentials — refusing to start a retrain blind`);
