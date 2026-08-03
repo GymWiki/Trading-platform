@@ -1,18 +1,16 @@
 "use client";
 
-import { useEffect, useId, useState, type FormEvent } from "react";
-import Link from "next/link";
-import { Loader2, Plus, X, Link2, Check } from "lucide-react";
-import type { BotConfigurationDTO, ExchangeConnectionDTO } from "@/lib/types";
+import { useId, useState, type FormEvent } from "react";
+import { Loader2, Plus, X } from "lucide-react";
+import type { BotConfigurationDTO } from "@/lib/types";
 import { InfoTooltip } from "@/components/ui/Tooltip";
+import { ExchangeCombobox } from "@/components/ui/ExchangeCombobox";
 import { StrategyPicker } from "@/components/ui/StrategyPicker";
 import { PairSelector } from "@/components/ui/PairSelector";
 import { Switch } from "@/components/ui/Switch";
 import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import { STRATEGY_PRESETS, type StrategyPreset } from "@/lib/strategy-presets";
-import { cn } from "@/lib/utils";
 import { apiFetch, toErrorMessage } from "@/lib/api-client";
-import type { PlatformWithBalance } from "@/lib/platforms";
 
 interface NewBotDialogProps {
   onCreated: (bot: BotConfigurationDTO) => void;
@@ -22,52 +20,31 @@ const DEFAULT_STRATEGY = STRATEGY_PRESETS[0];
 
 const EMPTY_FORM = {
   botName: "",
-  exchangeConnectionId: "",
+  exchangeName: EXCHANGE_PRESETS[0].id,
   strategyId: DEFAULT_STRATEGY.id,
   autoSelectCoins: true,
   pairs: ["BTC/USDT", "ETH/USDT"] as string[],
 };
 
+// No exchange-account (API key/secret) step anymore — a bot only needs to
+// know which exchange's public market data to train and paper-trade
+// against (see lib/deploy-bot.ts, lib/hetzner.ts). Linking a real,
+// verified account is a separate step on the bot's own card, required
+// only when the user actually wants to go live.
 export function NewBotDialog({ onCreated }: NewBotDialogProps) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [connections, setConnections] = useState<ExchangeConnectionDTO[] | null>(null);
-  const [connectionsError, setConnectionsError] = useState<string | null>(null);
-
-  // Loaded fresh every time the dialog opens rather than once at mount —
-  // the user may well come straight back from /platforms having just
-  // connected an exchange, and a stale empty list would wrongly show the
-  // "no platforms yet" state.
-  useEffect(() => {
-    if (!open) return;
-    const controller = new AbortController();
-    setConnections(null);
-    setConnectionsError(null);
-    apiFetch<{ platforms: PlatformWithBalance[] }>("/api/platforms", { signal: controller.signal })
-      .then((data) => setConnections(data.platforms.map((p) => p.connection).filter((c) => c.isActive)))
-      .catch((err) => {
-        if (controller.signal.aborted) return;
-        setConnections([]);
-        setConnectionsError(toErrorMessage(err, "Kon platforms niet laden"));
-      });
-    return () => controller.abort();
-  }, [open]);
 
   const selectedStrategy: StrategyPreset =
     STRATEGY_PRESETS.find((s) => s.id === form.strategyId) ?? DEFAULT_STRATEGY;
-  const selectedConnection = connections?.find((c) => c.id === form.exchangeConnectionId);
-  const selectedExchange = selectedConnection && EXCHANGE_PRESETS.find((e) => e.id === selectedConnection.exchangeName);
+  const selectedExchange = EXCHANGE_PRESETS.find((e) => e.id === form.exchangeName);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
 
-    if (!form.exchangeConnectionId) {
-      setError("Kies een gekoppeld platform.");
-      return;
-    }
     if (!form.autoSelectCoins && form.pairs.length === 0) {
       setError("Kies minstens 1 handelspaar, of zet automatische coin-selectie aan.");
       return;
@@ -80,7 +57,7 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           botName: form.botName,
-          exchangeConnectionId: form.exchangeConnectionId,
+          exchangeName: form.exchangeName,
           strategy: selectedStrategy.className,
           strategyCode: selectedStrategy.code,
           freqaiConfig: selectedStrategy.freqaiConfig,
@@ -139,63 +116,15 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
               />
             </Field>
 
-            <FieldGroup label="Platform">
-              {connectionsError && (
-                <p className="mb-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
-                  {connectionsError}
-                </p>
-              )}
-              {connections === null ? (
-                <div className="flex items-center justify-center rounded-lg border border-border bg-background py-6">
-                  <Loader2 className="h-4 w-4 animate-spin text-slate-500" />
-                </div>
-              ) : connections.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border bg-background px-4 py-6 text-center">
-                  <Link2 className="h-6 w-6 text-slate-600" />
-                  <p className="text-xs text-slate-400">
-                    Je hebt nog geen platform gekoppeld. Koppel eerst een exchange om een bot aan te maken.
-                  </p>
-                  <Link
-                    href="/platforms"
-                    className="mt-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-background transition hover:bg-primary-hover"
-                  >
-                    Platform koppelen
-                  </Link>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {connections.map((connection) => {
-                    const preset = EXCHANGE_PRESETS.find((e) => e.id === connection.exchangeName);
-                    const checked = connection.id === form.exchangeConnectionId;
-                    return (
-                      <button
-                        key={connection.id}
-                        type="button"
-                        role="radio"
-                        aria-checked={checked}
-                        onClick={() => setForm({ ...form, exchangeConnectionId: connection.id })}
-                        className={cn(
-                          "flex items-center gap-2.5 rounded-lg border p-2.5 text-left transition",
-                          checked ? "border-primary bg-primary/10" : "border-border bg-background hover:border-primary/40",
-                        )}
-                      >
-                        <span
-                          className={cn(
-                            "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold",
-                            preset?.color ?? "bg-slate-500/20 text-slate-300",
-                          )}
-                        >
-                          {preset?.monogram ?? "?"}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                          {preset?.label ?? connection.exchangeName}
-                        </span>
-                        {checked && <Check className="h-4 w-4 shrink-0 text-primary" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+            <FieldGroup
+              label="Exchange"
+              tooltip="Welke exchange z'n publieke marktdata deze bot traint en paper-traded op. Een echt account koppel je later, per bot, alleen als je live wilt gaan."
+            >
+              <ExchangeCombobox
+                value={form.exchangeName}
+                onChange={(exchangeName) => setForm({ ...form, exchangeName })}
+                aria-label="Exchange"
+              />
               {selectedExchange && (
                 <p className="mt-2 rounded-lg bg-background px-3 py-2 text-[11px] leading-relaxed text-slate-400">
                   {selectedExchange.feeNote}
@@ -251,7 +180,7 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
 
           <button
             type="submit"
-            disabled={isSubmitting || !connections?.length}
+            disabled={isSubmitting}
             className="mt-4 flex w-full shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-background transition hover:bg-primary-hover disabled:opacity-50"
           >
             {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}

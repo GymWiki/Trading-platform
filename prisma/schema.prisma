@@ -125,16 +125,21 @@ enum BotStatus {
   @@map("bot_status")
 }
 
-// A user's linked exchange account — added credentials once, reused by any
-// number of bots. Splitting this out of BotConfiguration (which used to
-// hold its own exchangeApiKey/exchangeApiSecret) is what makes the
-// /platforms "connect once, see your balance" flow and the Go Live balance
-// check possible: both need to query a real exchange balance independent
-// of any particular bot.
+// A bot's own linked exchange account. One-to-one with BotConfiguration
+// (bot_id is unique below) — bots never share a connection, so each bot's
+// credentials, verification state, and blast radius (a compromised key
+// only ever exposes one bot's wallet, not every bot's) are fully isolated.
+// Optional on the bot's side: a bot can train and paper-trade with no
+// connection at all (see lib/deploy-bot.ts), since both only ever need
+// public market data — a connection only becomes required at the Go Live
+// gate (app/api/bots/[id]/golive), and only once `verified` is true.
 model ExchangeConnection {
   id     String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId String  @map("user_id") @db.Uuid
   user   Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  botId String           @unique @map("bot_id") @db.Uuid
+  bot   BotConfiguration @relation(fields: [botId], references: [id], onDelete: Cascade)
 
   // Closed list validated against EXCHANGE_PRESETS ids (see
   // lib/exchange-presets.ts) at the API boundary — kept a plain String
@@ -153,13 +158,16 @@ model ExchangeConnection {
   apiSecret String @map("api_secret")
 
   isActive Boolean @default(true) @map("is_active")
-
-  bots BotConfiguration[]
+  // Set true only once POST /api/bots/[id]/exchange-connection has
+  // successfully called fetchFreeBalance with these exact credentials —
+  // never optimistically on save. The Go Live gate (app/api/bots/[id]/golive)
+  // requires this, not just a connection's mere existence, since an
+  // unverified row could hold a typo'd or since-revoked key.
+  verified Boolean @default(false) @map("is_verified")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  @@unique([userId, exchangeName])
   @@index([userId])
   @@map("exchange_connections")
 }
@@ -171,19 +179,14 @@ model BotConfiguration {
 
   botName String @map("bot_name")
 
-  // The linked account whose credentials this bot trades with (see
-  // ExchangeConnection above) — replaces the per-bot exchangeApiKey/
-  // exchangeApiSecret this model used to carry directly. onDelete: Restrict
-  // so removing a connection that's still backing a bot fails loudly
-  // (app/api/platforms/[id]/route.ts checks this before attempting the
-  // delete) rather than orphaning a deployed bot's credentials.
-  exchangeConnectionId String             @map("exchange_connection_id") @db.Uuid
-  exchangeConnection   ExchangeConnection @relation(fields: [exchangeConnectionId], references: [id], onDelete: Restrict)
-  // Denormalized copy of exchangeConnection.exchangeName at creation time —
-  // read in many places (lib/hetzner.ts, fee lookups, display) that don't
-  // otherwise need to join the connection, and immutable for the bot's
-  // lifetime since swapping a bot's exchange isn't supported.
-  exchangeName String @map("exchange_name")
+  // Which exchange this bot trains and trades against — chosen at creation
+  // time (which public OHLCV feed to train on) and immutable afterward,
+  // independent of whether a real account is ever linked. The back-relation
+  // to this bot's own ExchangeConnection (see that model) is optional and
+  // only needs to exist once the user connects an account, which itself is
+  // only required at the Go Live gate — see app/api/bots/[id]/golive.
+  exchangeName       String              @map("exchange_name")
+  exchangeConnection ExchangeConnection?
 
   strategy String
   // The actual Freqtrade strategy source (must define `class <strategy>`),

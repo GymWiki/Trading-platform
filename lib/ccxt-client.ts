@@ -56,11 +56,13 @@ function translateCcxtError(err: unknown, exchangeName: string): string {
   return `Kon balans niet ophalen van ${exchangeName}: ${message}`;
 }
 
-// The one place this app talks to a real exchange's balance endpoint —
-// used both by /platforms (show what's available right after connecting)
-// and the Go Live flow (the $50 minimum-balance gate). Read-only: only
-// ever calls fetchBalance, never a trading endpoint, so a connection with
-// trade-only API key permissions (no withdraw) still works fully.
+// The one place this app talks to a real exchange's balance endpoint — used
+// by connecting a bot's exchange account (see app/api/bots/[id]/
+// exchange-connection, which requires this to succeed before saving
+// anything as verified) and the Go Live flow (the $50 minimum-balance
+// gate). Read-only: only ever calls fetchBalance, never a trading
+// endpoint, so a connection with trade-only API key permissions (no
+// withdraw) still works fully.
 export async function fetchFreeBalance(exchangeName: string, apiKey: string, apiSecret: string): Promise<FreeBalance> {
   const ccxtId = resolveCcxtId(exchangeName);
   const ExchangeClass = (ccxt as unknown as Record<string, new (config: Record<string, unknown>) => Exchange>)[

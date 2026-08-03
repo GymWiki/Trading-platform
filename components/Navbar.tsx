@@ -29,12 +29,6 @@ export async function Navbar() {
                     BottomNav below md: — repeating them here too would
                     just be the overflowing row this replaces. */}
                 <Link
-                  href="/platforms"
-                  className="hidden text-sm font-medium text-slate-300 transition hover:text-primary md:inline"
-                >
-                  Platformen
-                </Link>
-                <Link
                   href="/settings"
                   className="hidden text-sm font-medium text-slate-300 transition hover:text-primary md:inline"
                 >

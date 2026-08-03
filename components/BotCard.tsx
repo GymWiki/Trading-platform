@@ -17,13 +17,19 @@ import {
   AlertOctagon,
   Moon,
   PlayCircle,
+  Link2,
+  ShieldCheck,
+  ShieldAlert,
+  Unlink,
 } from "lucide-react";
-import type { BotConfigurationDTO, TrainingStatus } from "@/lib/types";
+import type { BotConfigurationDTO, ExchangeConnectionDTO, TrainingStatus } from "@/lib/types";
 import { StatusBadge, TrainingStatusBadge } from "@/components/ui/StatusBadge";
 import { TrainingModeToggle } from "@/components/ui/Toggle";
 import { GoLiveModal } from "@/components/GoLiveModal";
+import { ConnectExchangeDialog } from "@/components/ConnectExchangeDialog";
 import { TradeHistoryFeed } from "@/components/TradeHistoryFeed";
 import { Switch } from "@/components/ui/Switch";
+import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import { DEFAULT_PAPER_TOTAL_BUDGET, DEFAULT_PAPER_MAX_STAKE_PERCENTAGE } from "@/lib/paper-trading-defaults";
 import { isTauri } from "@/lib/tauri";
 import { apiFetch, toErrorMessage } from "@/lib/api-client";
@@ -49,6 +55,8 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   const [isTogglingAutoCompound, setIsTogglingAutoCompound] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
+  const [isConnectExchangeOpen, setIsConnectExchangeOpen] = useState(false);
+  const [isDisconnectingExchange, setIsDisconnectingExchange] = useState(false);
 
   // Optimistic overrides for the two network-backed toggles below: bot.X
   // only changes once the parent re-renders with a fresh prop after
@@ -306,6 +314,20 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
     }
   }
 
+  async function handleDisconnectExchange() {
+    if (!confirm("Exchange-account ontkoppelen van deze bot?")) return;
+    setError(null);
+    setIsDisconnectingExchange(true);
+    try {
+      await apiFetch(`/api/bots/${bot.id}/exchange-connection`, { method: "DELETE" });
+      onUpdate({ ...bot, exchangeConnection: null });
+    } catch (err) {
+      setError(toErrorMessage(err, "Ontkoppelen is mislukt"));
+    } finally {
+      setIsDisconnectingExchange(false);
+    }
+  }
+
   return (
     <div className="card-surface flex flex-col gap-4 p-5">
       <div className="flex items-start justify-between gap-2">
@@ -326,6 +348,73 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
         </div>
         <StatusBadge status={bot.deploymentStatus} />
       </div>
+
+      <div className="flex items-center justify-between gap-3 rounded-lg bg-background px-3 py-2">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-slate-200">Exchange-account</p>
+          {bot.exchangeConnection ? (
+            <p className="mt-0.5 flex items-center gap-1 text-[11px]">
+              {bot.exchangeConnection.verified ? (
+                <>
+                  <ShieldCheck className="h-3 w-3 shrink-0 text-primary" />
+                  <span className="text-primary">Geverifieerd</span>
+                </>
+              ) : (
+                <>
+                  <ShieldAlert className="h-3 w-3 shrink-0 text-amber-400" />
+                  <span className="text-amber-400">Niet geverifieerd</span>
+                </>
+              )}
+              <span className="text-slate-500">
+                &middot; {EXCHANGE_PRESETS.find((e) => e.id === bot.exchangeConnection?.exchangeName)?.label ?? bot.exchangeConnection.exchangeName}
+              </span>
+            </p>
+          ) : (
+            <p className="mt-0.5 text-[11px] text-slate-500">
+              Nog niet gekoppeld — alleen nodig om live te gaan, training/paper trading werkt zonder.
+            </p>
+          )}
+        </div>
+        {bot.exchangeConnection ? (
+          <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setIsConnectExchangeOpen(true)}
+              className="rounded-md border border-border px-2.5 py-1 text-[11px] font-medium text-slate-300 transition hover:border-primary hover:text-primary"
+            >
+              Vervang
+            </button>
+            <button
+              type="button"
+              onClick={handleDisconnectExchange}
+              disabled={isDisconnectingExchange}
+              className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[11px] font-medium text-slate-300 transition hover:border-red-500/50 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isDisconnectingExchange ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unlink className="h-3 w-3" />}
+              Ontkoppel
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setIsConnectExchangeOpen(true)}
+            className="flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-background transition hover:bg-primary-hover"
+          >
+            <Link2 className="h-3 w-3" />
+            Koppel exchange account
+          </button>
+        )}
+      </div>
+
+      {isConnectExchangeOpen && (
+        <ConnectExchangeDialog
+          botId={bot.id}
+          botName={bot.botName}
+          exchangeName={bot.exchangeName}
+          onConnected={(connection) => onUpdate({ ...bot, exchangeConnection: connection })}
+          onClose={() => setIsConnectExchangeOpen(false)}
+        />
+      )}
 
       <div className="flex items-center justify-between gap-3 rounded-lg bg-background px-3 py-2">
         <div className="min-w-0">

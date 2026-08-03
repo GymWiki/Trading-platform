@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { botSelect, toBotDTO } from "@/lib/bot-select";
+import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import {
   isSafePythonIdentifier,
   strategyCodeDefinesClass,
@@ -14,12 +15,21 @@ import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
 export const dynamic = "force-dynamic";
 
+// Closed list, not free text — matches the exchange picker in
+// components/NewBotDialog.tsx exactly, same boundary EXCHANGE_PRESETS
+// already enforced for the old exchangeConnectionId flow.
+const exchangeIds = EXCHANGE_PRESETS.map((e) => e.id);
+
 // freqaiConfig's exact shape is validated separately by isValidFreqAIConfig
 // (see lib/strategy-validation.ts) — Zod only needs to confirm it's an
 // object here, not re-encode every nested field as a second schema.
 const createBotBodySchema = z.object({
   botName: z.string().trim().min(1, "botName is required"),
-  exchangeConnectionId: z.string().min(1, "exchangeConnectionId is required"),
+  // No connection required at creation — training and paper trading only
+  // ever need this exchange's public market data (see lib/deploy-bot.ts,
+  // lib/hetzner.ts). A real, verified account is only required later, at
+  // the Go Live gate (app/api/bots/[id]/golive).
+  exchangeName: z.string().refine((v) => exchangeIds.includes(v), { message: "exchangeName is not a supported exchange" }),
   strategy: z.string().min(1, "strategy is required"),
   strategyCode: z.string().min(1, "strategyCode is required"),
   freqaiConfig: z.record(z.string(), z.unknown()),
@@ -56,16 +66,7 @@ export const POST = withErrorHandling(async (req: NextRequest) => {
 
   const parsed = await parseJsonBody(req, createBotBodySchema);
   if ("error" in parsed) return parsed.error;
-  const { botName, exchangeConnectionId, strategy, strategyCode, freqaiConfig, autoSelectCoins, pairWhitelist } =
-    parsed.data;
-
-  // Must be a platform this user actually linked (see /platforms) — a bot
-  // never holds its own exchange credentials anymore, only a reference to
-  // one of the user's ExchangeConnection rows.
-  const connection = await prisma.exchangeConnection.findUnique({ where: { id: exchangeConnectionId } });
-  if (!connection || connection.userId !== user.id || !connection.isActive) {
-    return NextResponse.json({ error: "exchangeConnectionId is not a valid, linked platform" }, { status: 400 });
-  }
+  const { botName, exchangeName, strategy, strategyCode, freqaiConfig, autoSelectCoins, pairWhitelist } = parsed.data;
 
   // Defaults to on (matches BotConfiguration.autoSelectCoins @default(true))
   // — an explicit false is the only way to require a manual whitelist.
@@ -119,8 +120,7 @@ export const POST = withErrorHandling(async (req: NextRequest) => {
     data: {
       userId: user.id,
       botName,
-      exchangeConnectionId: connection.id,
-      exchangeName: connection.exchangeName,
+      exchangeName,
       strategy,
       strategyCode,
       freqaiConfig: freqaiConfig as Prisma.InputJsonValue,

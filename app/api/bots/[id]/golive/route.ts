@@ -51,9 +51,9 @@ export const GET = withErrorHandling(async (_req: NextRequest, { params }: { par
     );
   }
 
-  const connection = await prisma.exchangeConnection.findUnique({ where: { id: bot.exchangeConnectionId } });
-  if (!connection) {
-    return NextResponse.json({ error: "Het gekoppelde platform bestaat niet meer" }, { status: 404 });
+  const connection = await prisma.exchangeConnection.findUnique({ where: { botId: bot.id } });
+  if (!connection || !connection.verified) {
+    return NextResponse.json({ error: "Koppel eerst een geldig exchange-account voordat je live gaat." }, { status: 409 });
   }
 
   try {
@@ -108,9 +108,13 @@ export const POST = withErrorHandling(async (req: NextRequest, { params }: { par
   if ("error" in parsed) return parsed.error;
   const { totalBudget, maxStakePercentage } = parsed.data;
 
-  const connection = await prisma.exchangeConnection.findUnique({ where: { id: bot.exchangeConnectionId } });
-  if (!connection) {
-    return NextResponse.json({ error: "Het gekoppelde platform bestaat niet meer" }, { status: 404 });
+  // This is the actual gate (part 1/3 + part 2/7 of the "no shared,
+  // unverified credentials for real money" requirement) — the GET above is
+  // only a preview for the UI, so it's this check, not that one, that must
+  // never be skippable.
+  const connection = await prisma.exchangeConnection.findUnique({ where: { botId: bot.id } });
+  if (!connection || !connection.verified) {
+    return NextResponse.json({ error: "Koppel eerst een geldig exchange-account voordat je live gaat." }, { status: 409 });
   }
 
   // Never trust a client-only balance check for a real-money gate —

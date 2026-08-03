@@ -2,12 +2,15 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bot, Link2, Settings } from "lucide-react";
+import { Bot, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+// Exchange-account management moved from its own global "Platformen" tab
+// into each bot's own card (see components/BotCard.tsx, components/
+// ConnectExchangeDialog.tsx) — there's no longer a bot-independent
+// "platforms" screen for this tab to point at.
 const TABS = [
   { href: "/dashboard", label: "Bots", icon: Bot },
-  { href: "/platforms", label: "Platformen", icon: Link2 },
   { href: "/settings", label: "Instellingen", icon: Settings },
 ] as const;
 

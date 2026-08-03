@@ -43,17 +43,21 @@ export async function deployBotToVps({ bot, supabase }: DeployBotParams) {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   if (!appUrl) throw new Error("NEXT_PUBLIC_APP_URL is not configured");
 
-  // Bots no longer carry their own exchange credentials — they reference a
-  // linked ExchangeConnection (see /platforms) instead, so the real keys
-  // live there and are fetched fresh on every (re)deploy. findUnique (not
-  // OrThrow) because the connection can be deleted out from under an
-  // already-created bot between creation and a later redeploy — a plain
-  // Prisma "not found" would surface as an opaque 500 to whichever caller
-  // wraps this (POST /api/deploy, the training callback, Go Live).
-  const connection = await prisma.exchangeConnection.findUnique({ where: { id: bot.exchangeConnectionId } });
-  if (!connection) {
-    throw new Error("The exchange platform linked to this bot no longer exists — reconnect it under /platforms.");
+  // Training and paper trading only ever need public market data (see
+  // lib/hetzner.ts buildFreqAITrainingCloudInit's own doc comment) — this
+  // bot's own ExchangeConnection (see prisma/schema.prisma) is genuinely
+  // optional here. Only a live deploy requires one, and requires it to be
+  // verified, not just present: an unverified row could hold a typo'd or
+  // since-revoked key that would otherwise only surface as a cryptic
+  // failure deep in a cloud-init run.
+  const connection = await prisma.exchangeConnection.findUnique({ where: { botId: bot.id } });
+  if (!bot.isPaperTrading && (!connection || !connection.verified)) {
+    throw new Error("Koppel eerst een geldig exchange-account voordat je live gaat.");
   }
+  // Narrowed, not just checked above: TypeScript can't see through the
+  // early-return-less guard, and every live-only use below needs a
+  // definitely-verified connection in hand.
+  const liveConnection = !bot.isPaperTrading ? connection! : null;
 
   // Best-effort, never blocking: a bot must still deploy fine whether or
   // not the operator configured a central Telegram bot, or this user ever
@@ -89,10 +93,10 @@ export async function deployBotToVps({ bot, supabase }: DeployBotParams) {
   // failed balance read must never block a deploy, it just falls back to
   // freqtrade's own tradable_balance_ratio default.
   let tradableBalanceRatio: number | undefined;
-  if (bot.autoCompound && !bot.isPaperTrading) {
+  if (bot.autoCompound && liveConnection) {
     const budget = bot.totalBudget ?? DEFAULT_PAPER_TOTAL_BUDGET;
     try {
-      const balance = await fetchFreeBalance(bot.exchangeName, decrypt(connection.apiKey), decrypt(connection.apiSecret));
+      const balance = await fetchFreeBalance(bot.exchangeName, decrypt(liveConnection.apiKey), decrypt(liveConnection.apiSecret));
       if (balance.amount > 0) {
         tradableBalanceRatio = Math.min(
           MAX_TRADABLE_BALANCE_RATIO,
@@ -107,8 +111,12 @@ export async function deployBotToVps({ bot, supabase }: DeployBotParams) {
   const cloudInit = buildFreqtradeCloudInit({
     botName: bot.botName.toLowerCase().replace(/[^a-z0-9-]/g, "-"),
     exchangeName: bot.exchangeName,
-    exchangeApiKey: decrypt(connection.apiKey),
-    exchangeApiSecret: decrypt(connection.apiSecret),
+    // Blank for paper trading — dry-run only ever needs public market data
+    // (see lib/hetzner.ts buildFreqAITrainingCloudInit's doc comment for
+    // the training-side version of the same rule), so there's nothing to
+    // decrypt when liveConnection is null.
+    exchangeApiKey: liveConnection ? decrypt(liveConnection.apiKey) : "",
+    exchangeApiSecret: liveConnection ? decrypt(liveConnection.apiSecret) : "",
     strategy: bot.strategy,
     strategyCode: bot.strategyCode,
     freqaiConfig: bot.freqaiConfig as unknown as FreqAIProfileConfig,

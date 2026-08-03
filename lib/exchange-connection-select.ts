@@ -9,8 +9,10 @@ import type { ExchangeConnectionDTO } from "@/lib/types";
 // of going through this DTO.
 export const exchangeConnectionSelect = {
   id: true,
+  botId: true,
   exchangeName: true,
   isActive: true,
+  verified: true,
   createdAt: true,
 } satisfies Prisma.ExchangeConnectionSelect;
 

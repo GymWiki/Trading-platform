@@ -9,8 +9,10 @@ import type { FreqAIProfileConfig } from "@/lib/strategy-presets";
 export const botSelect = {
   id: true,
   botName: true,
-  exchangeConnectionId: true,
   exchangeName: true,
+  exchangeConnection: {
+    select: { id: true, exchangeName: true, verified: true },
+  },
   strategy: true,
   strategyCode: true,
   freqaiConfig: true,

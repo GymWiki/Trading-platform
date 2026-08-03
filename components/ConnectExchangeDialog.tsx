@@ -1,59 +1,54 @@
 "use client";
 
-import { useId, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Loader2, X } from "lucide-react";
-import { ExchangeCombobox } from "@/components/ui/ExchangeCombobox";
 import { InfoTooltip } from "@/components/ui/Tooltip";
 import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
-import type { PlatformWithBalance } from "@/lib/platforms";
+import type { ExchangeConnectionDTO } from "@/lib/types";
+import type { FreeBalance } from "@/lib/ccxt-client";
 import { apiFetch, toErrorMessage } from "@/lib/api-client";
 
-interface AddPlatformDialogProps {
-  connectedExchangeIds: string[];
-  onAdded: (platform: PlatformWithBalance) => void;
+interface ConnectExchangeDialogProps {
+  botId: string;
+  botName: string;
+  exchangeName: string;
+  onConnected: (connection: ExchangeConnectionDTO) => void;
   onClose: () => void;
 }
 
-const EMPTY_FORM = { exchangeName: EXCHANGE_PRESETS[0].id, apiKey: "", apiSecret: "" };
-
-// Controlled by the parent (like GoLiveModal) rather than owning its own
-// trigger — PlatformsGrid renders two different triggers for this same
-// modal (an inline desktop button, a mobile FAB), so the open/closed state
-// has to live one level up instead of being private to this component.
-// Mirrors NewBotDialog's modal shell/Field-FieldGroup pattern (see that
-// file for why composite widgets use a group + aria-labelledby instead of
-// a native <label>) so adding a platform feels like the same product as
-// adding a bot, not a bolted-on admin screen.
-export function AddPlatformDialog({ connectedExchangeIds, onAdded, onClose }: AddPlatformDialogProps) {
-  const [form, setForm] = useState(EMPTY_FORM);
+// Bot-scoped equivalent of the old, now-removed /platforms "Platform
+// koppelen" dialog — same shape (exchange + API key/secret), but the
+// exchange itself isn't a choice here: it's fixed to this bot's own
+// (immutable) exchangeName, since ExchangeConnection.botId is now unique
+// (see prisma/schema.prisma) and a bot's linked account must match the
+// exchange it already trains/paper-trades against. POST validates the
+// credentials with a real balance call before saving anything — see
+// app/api/bots/[id]/exchange-connection.
+export function ConnectExchangeDialog({ botId, botName, exchangeName, onConnected, onClose }: ConnectExchangeDialogProps) {
+  const [apiKey, setApiKey] = useState("");
+  const [apiSecret, setApiSecret] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const labelId = useId();
 
-  const selectedExchange = EXCHANGE_PRESETS.find((e) => e.id === form.exchangeName);
-  const alreadyConnected = connectedExchangeIds.includes(form.exchangeName);
+  const preset = EXCHANGE_PRESETS.find((e) => e.id === exchangeName);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError(null);
-
-    if (alreadyConnected) {
-      setError("Dit platform is al gekoppeld.");
-      return;
-    }
-
     setIsSubmitting(true);
     try {
-      const data = await apiFetch<{ platform: PlatformWithBalance }>("/api/platforms", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      });
-      onAdded(data.platform);
-      setForm(EMPTY_FORM);
+      const data = await apiFetch<{ connection: ExchangeConnectionDTO; balance: FreeBalance }>(
+        `/api/bots/${botId}/exchange-connection`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ apiKey, apiSecret }),
+        },
+      );
+      onConnected(data.connection);
       onClose();
     } catch (err) {
-      setError(toErrorMessage(err, "Failed to add platform"));
+      setError(toErrorMessage(err, "Koppelen is mislukt"));
     } finally {
       setIsSubmitting(false);
     }
@@ -64,8 +59,10 @@ export function AddPlatformDialog({ connectedExchangeIds, onAdded, onClose }: Ad
       <div className="card-surface flex max-h-[90vh] w-full max-w-md flex-col p-6">
         <div className="mb-4 flex shrink-0 items-center justify-between">
           <div>
-            <h2 className="font-semibold">Platform koppelen</h2>
-            <p className="text-xs text-slate-400">Eén keer koppelen — elke bot kan dit account daarna gebruiken.</p>
+            <h2 className="font-semibold">Exchange-account koppelen</h2>
+            <p className="text-xs text-slate-400">
+              Voor {botName} op {preset?.label ?? exchangeName} — alleen voor deze bot, niet gedeeld met andere bots.
+            </p>
           </div>
           <button
             type="button"
@@ -78,26 +75,11 @@ export function AddPlatformDialog({ connectedExchangeIds, onAdded, onClose }: Ad
 
         <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
-            <div>
-              <span id={labelId} className="mb-1 block text-xs font-medium text-slate-400">
-                Exchange
-              </span>
-              <div role="group" aria-labelledby={labelId}>
-                <ExchangeCombobox
-                  value={form.exchangeName}
-                  onChange={(exchangeName) => setForm({ ...form, exchangeName })}
-                  aria-label="Exchange"
-                />
-              </div>
-              {selectedExchange && (
-                <p className="mt-2 rounded-lg bg-background px-3 py-2 text-[11px] leading-relaxed text-slate-400">
-                  {selectedExchange.feeNote}
-                </p>
-              )}
-              {alreadyConnected && (
-                <p className="mt-2 text-[11px] text-amber-400">Dit platform is al gekoppeld aan je account.</p>
-              )}
-            </div>
+            {preset && (
+              <p className="rounded-lg bg-background px-3 py-2 text-[11px] leading-relaxed text-slate-400">
+                {preset.feeNote}
+              </p>
+            )}
 
             <label className="block">
               <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-400">
@@ -108,8 +90,8 @@ export function AddPlatformDialog({ connectedExchangeIds, onAdded, onClose }: Ad
                 required
                 type="password"
                 autoComplete="off"
-                value={form.apiKey}
-                onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
                 className="input"
                 placeholder="••••••••••••"
               />
@@ -124,8 +106,8 @@ export function AddPlatformDialog({ connectedExchangeIds, onAdded, onClose }: Ad
                 required
                 type="password"
                 autoComplete="off"
-                value={form.apiSecret}
-                onChange={(e) => setForm({ ...form, apiSecret: e.target.value })}
+                value={apiSecret}
+                onChange={(e) => setApiSecret(e.target.value)}
                 className="input"
                 placeholder="••••••••••••"
               />
@@ -140,11 +122,11 @@ export function AddPlatformDialog({ connectedExchangeIds, onAdded, onClose }: Ad
 
           <button
             type="submit"
-            disabled={isSubmitting || alreadyConnected}
+            disabled={isSubmitting}
             className="mt-4 flex w-full shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-semibold text-background transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
-            Platform koppelen
+            {isSubmitting ? "Verifiëren…" : "Koppelen"}
           </button>
         </form>
       </div>

@@ -25,16 +25,22 @@ export interface TrainingJobDTO {
 
 export interface ExchangeConnectionDTO {
   id: string;
+  botId: string;
   exchangeName: string;
   isActive: boolean;
+  verified: boolean;
   createdAt: string | Date;
 }
 
 export interface BotConfigurationDTO {
   id: string;
   botName: string;
-  exchangeConnectionId: string;
   exchangeName: string;
+  // This bot's own linked account (see prisma/schema.prisma
+  // ExchangeConnection) — null until the user connects one. Never required
+  // for training or paper trading, only for going live (see
+  // app/api/bots/[id]/golive), and only once `verified` is true.
+  exchangeConnection: { id: string; exchangeName: string; verified: boolean } | null;
   strategy: string;
   strategyCode: string;
   freqaiConfig: FreqAIProfileConfig;
