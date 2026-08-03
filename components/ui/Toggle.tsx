@@ -17,17 +17,17 @@ export function TrainingModeToggle({ mode, onChange, disabled }: TrainingModeTog
       aria-checked={isCloud}
       disabled={disabled}
       onClick={() => onChange(isCloud ? "LOCAL" : "CLOUD")}
-      className={cn(
-        "flex w-full items-center justify-between rounded-lg border px-3 py-2 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50",
-        isCloud
-          ? "border-accent/40 bg-accent/10 text-accent"
-          : "border-primary/40 bg-primary/10 text-primary",
-      )}
+      className={
+        // One color variant regardless of LOCAL/CLOUD — matches
+        // components/ui/Switch.tsx, which never varies its on-color either.
+        // Was accent (gold) for CLOUD and primary (green) for LOCAL, which
+        // made an otherwise-identical control look like two different
+        // components depending on state.
+        "flex w-full items-center justify-between rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-xs font-medium text-primary transition disabled:cursor-not-allowed disabled:opacity-50"
+      }
     >
       <span>{isCloud ? "Train in the Cloud" : "Train op mijn Windows-pc"}</span>
-      <span
-        className={cn("relative h-5 w-9 shrink-0 rounded-full transition", isCloud ? "bg-accent/40" : "bg-primary/40")}
-      >
+      <span className={cn("relative h-5 w-9 shrink-0 rounded-full transition", isCloud ? "bg-primary" : "bg-border")}>
         <span
           className={cn(
             // left-0.5 pins the thumb's resting position explicitly — left

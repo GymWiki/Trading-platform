@@ -422,7 +422,7 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
             type="button"
             onClick={handleStartCloudTraining}
             disabled={isStartingCloudTraining || jobActive}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-accent/40 px-3 py-2 text-xs font-medium text-accent transition hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-primary/40 px-3 py-2 text-xs font-medium text-primary transition hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isStartingCloudTraining || jobActive ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
