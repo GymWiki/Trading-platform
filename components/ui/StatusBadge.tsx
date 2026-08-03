@@ -30,6 +30,7 @@ const TRAINING_STYLES: Record<TrainingStatus, string> = {
   TRAINING: "bg-accent/10 text-accent border-accent/30",
   COMPLETED: "bg-emerald-500/10 text-emerald-300 border-emerald-500/30",
   FAILED: "bg-red-500/10 text-red-300 border-red-500/30",
+  CANCELLED: "bg-slate-500/10 text-slate-400 border-slate-500/30",
 };
 
 const TRAINING_LABELS: Record<TrainingStatus, string> = {
@@ -37,6 +38,7 @@ const TRAINING_LABELS: Record<TrainingStatus, string> = {
   TRAINING: "Training…",
   COMPLETED: "Training complete",
   FAILED: "Training failed",
+  CANCELLED: "Training gestopt",
 };
 
 export function TrainingStatusBadge({ status }: { status: TrainingStatus }) {

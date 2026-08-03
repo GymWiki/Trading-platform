@@ -31,10 +31,11 @@ export const POST = withErrorHandling(async (req: NextRequest) => {
   }
 
   // A terminal job (COMPLETED/FAILED already recorded via the callback
-  // route) never needs its stage touched again — the script self-destructs
-  // right after that, so a stray/racing progress ping this late is a
-  // harmless no-op, not an error.
-  if (job.status === "COMPLETED" || job.status === "FAILED") {
+  // route, or CANCELLED via POST /api/train/cloud/stop) never needs its
+  // stage touched again — the script self-destructs right after that, or
+  // the VM has already been deleted out from under it, so a stray/racing
+  // progress ping this late is a harmless no-op, not an error.
+  if (job.status === "COMPLETED" || job.status === "FAILED" || job.status === "CANCELLED") {
     return NextResponse.json({ ok: true });
   }
 

@@ -115,10 +115,10 @@ export const GET = withErrorHandling(async (req: NextRequest) => {
 
   const avgDurationSeconds = await getAverageDurationSeconds(job.botId, user.id);
 
-  if (job.status === "FAILED") {
+  if (job.status === "FAILED" || job.status === "CANCELLED") {
     // Freeze the estimate at whatever it would have been at the moment of
-    // failure — still informative ("it got about this far") without
-    // implying the job is still progressing.
+    // failure/cancellation — still informative ("it got about this far")
+    // without implying the job is still progressing.
     const { percentComplete, elapsedSeconds } = computeProgress(
       job.stage as Stage,
       job.createdAt,

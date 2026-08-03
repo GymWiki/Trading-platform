@@ -22,6 +22,7 @@ import {
   ShieldCheck,
   ShieldAlert,
   Unlink,
+  XCircle,
 } from "lucide-react";
 import type { BotConfigurationDTO, ExchangeConnectionDTO, TrainingStatus } from "@/lib/types";
 import { StatusBadge, TrainingStatusBadge } from "@/components/ui/StatusBadge";
@@ -48,6 +49,7 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   const [isDeploying, setIsDeploying] = useState(false);
   const [isTrainingLocally, setIsTrainingLocally] = useState(false);
   const [isStartingCloudTraining, setIsStartingCloudTraining] = useState(false);
+  const [isStoppingTraining, setIsStoppingTraining] = useState(false);
   const [isRevealingCredentials, setIsRevealingCredentials] = useState(false);
   const [apiCredentials, setApiCredentials] = useState<{ username: string; password: string } | null>(null);
   const [copiedField, setCopiedField] = useState<"username" | "password" | null>(null);
@@ -275,6 +277,33 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
       setError(toErrorMessage(err, "Failed to start cloud training"));
     } finally {
       setIsStartingCloudTraining(false);
+    }
+  }
+
+  // Cancels the in-flight Cloud Training job and deletes its Hetzner server
+  // (see POST /api/train/cloud/stop, which reuses the same
+  // deleteHetznerServer() the reap cron uses). Returns the fresh bot DTO —
+  // its latestTrainingJob.status flips to CANCELLED, which is enough on its
+  // own to flip jobActive false below and unmount TrainingProgressBar, so
+  // there's nothing extra to do here to "stop polling".
+  async function handleStopTraining() {
+    if (!bot.latestTrainingJob) return;
+    if (!confirm("Weet je zeker dat je de training wilt stoppen? De cloud-server wordt direct verwijderd.")) {
+      return;
+    }
+    setError(null);
+    setIsStoppingTraining(true);
+    try {
+      const data = await apiFetch<{ bot: BotConfigurationDTO }>("/api/train/cloud/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: bot.latestTrainingJob.id }),
+      });
+      onUpdate(data.bot);
+    } catch (err) {
+      setError(toErrorMessage(err, "Stoppen van de training is mislukt"));
+    } finally {
+      setIsStoppingTraining(false);
     }
   }
 
@@ -607,7 +636,18 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
             {/* Own polling loop, distinct from BotFleetGrid's slower
                 fleet-wide refresh — see that component's doc comment. */}
             {jobActive && bot.latestTrainingJob && (
-              <TrainingProgressBar jobId={bot.latestTrainingJob.id} />
+              <>
+                <TrainingProgressBar jobId={bot.latestTrainingJob.id} />
+                <button
+                  type="button"
+                  onClick={handleStopTraining}
+                  disabled={isStoppingTraining}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-500/40 px-3 py-2 text-xs font-medium text-red-400 transition hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isStoppingTraining ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />}
+                  {isStoppingTraining ? "Wordt gestopt…" : "Stop training"}
+                </button>
+              </>
             )}
           </>
         ) : isTauri() ? (

@@ -75,6 +75,11 @@ enum TrainingStatus {
   TRAINING
   COMPLETED
   FAILED
+  // User-initiated cancel (POST /api/train/cloud/stop) — distinct from
+  // FAILED: nothing went wrong, the user asked for this. Treated as
+  // terminal everywhere FAILED is (idempotent guards, the reap cron's
+  // cleanup sweep, TrainingProgressBar's polling stop).
+  CANCELLED
 
   @@map("training_status")
 }

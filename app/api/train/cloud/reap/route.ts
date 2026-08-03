@@ -105,7 +105,11 @@ const handleReap = withErrorHandling(async (req: NextRequest) => {
       OR: [
         { status: "TRAINING", updatedAt: { lt: staleCutoff } },
         { status: "TRAINING", stage: { in: EARLY_STAGES }, stageUpdatedAt: { lt: earlyStaleCutoff } },
-        { status: { in: ["COMPLETED", "FAILED"] } },
+        // Also sweeps up a CANCELLED job (POST /api/train/cloud/stop) whose
+        // own Hetzner delete call failed and left hetznerServerId set —
+        // that route deliberately keeps it set in exactly that case so
+        // this backstop can retry.
+        { status: { in: ["COMPLETED", "FAILED", "CANCELLED"] } },
       ],
     },
   });

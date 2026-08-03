@@ -42,8 +42,11 @@ export const POST = withErrorHandling(async (req: NextRequest) => {
   }
 
   // Idempotent: the VM's cleanup trap may report a second time (e.g. if a
-  // curl retried). Terminal jobs just acknowledge without re-processing.
-  if (job.status === "COMPLETED" || job.status === "FAILED") {
+  // curl retried). Terminal jobs just acknowledge without re-processing —
+  // CANCELLED is included so a race between the user hitting "Stop
+  // training" and the VM's own trap firing right after can't have this
+  // late report clobber the cancellation back to COMPLETED/FAILED.
+  if (job.status === "COMPLETED" || job.status === "FAILED" || job.status === "CANCELLED") {
     return NextResponse.json({ ok: true });
   }
 

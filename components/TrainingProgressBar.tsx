@@ -11,7 +11,7 @@ type TrainingStage = "QUEUED" | "PULLING_IMAGE" | "DOWNLOADING_DATA" | "TRAINING
 
 interface TrainingStatusResponse {
   jobId: string;
-  status: "QUEUED" | "TRAINING" | "COMPLETED" | "FAILED";
+  status: "QUEUED" | "TRAINING" | "COMPLETED" | "FAILED" | "CANCELLED";
   stage: TrainingStage;
   percentComplete: number;
   elapsedSeconds: number;
@@ -65,7 +65,11 @@ export function TrainingProgressBar({ jobId }: TrainingProgressBarProps) {
         );
         setData(result);
         setError(null);
-        if ((result.status === "COMPLETED" || result.status === "FAILED") && intervalId) {
+        // CANCELLED here covers the (rare) case of another tab/device
+        // stopping this same job — the tab that actually clicked "Stop
+        // training" already stops polling immediately via its own onUpdate,
+        // see BotCard's handleStopTraining.
+        if ((result.status === "COMPLETED" || result.status === "FAILED" || result.status === "CANCELLED") && intervalId) {
           clearInterval(intervalId);
         }
       } catch (err) {
@@ -92,26 +96,28 @@ export function TrainingProgressBar({ jobId }: TrainingProgressBarProps) {
 
   const isDone = data.status === "COMPLETED";
   const isFailed = data.status === "FAILED";
+  const isCancelled = data.status === "CANCELLED";
+  const isTerminalWithIssue = isFailed || isCancelled;
 
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between text-[11px]">
-        <span className={isFailed ? "text-red-400" : isDone ? "text-primary" : "text-slate-400"}>
-          {isFailed ? "Training mislukt" : STAGE_LABELS[data.stage]}
+        <span className={isFailed ? "text-red-400" : isCancelled ? "text-slate-400" : isDone ? "text-primary" : "text-slate-400"}>
+          {isFailed ? "Training mislukt" : isCancelled ? "Training gestopt" : STAGE_LABELS[data.stage]}
         </span>
         <span className="tabular-nums text-slate-500">{isDone ? 100 : data.percentComplete}%</span>
       </div>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-background" role="progressbar" aria-valuenow={isDone ? 100 : data.percentComplete} aria-valuemin={0} aria-valuemax={100}>
         <div
-          className={`h-full rounded-full transition-all duration-500 ${isFailed ? "bg-red-500" : "bg-primary"}`}
+          className={`h-full rounded-full transition-all duration-500 ${isFailed ? "bg-red-500" : isCancelled ? "bg-slate-500" : "bg-primary"}`}
           style={{ width: `${isDone ? 100 : data.percentComplete}%` }}
         />
       </div>
-      {!isDone && !isFailed && data.estimatedRemainingSeconds !== null && (
+      {!isDone && !isTerminalWithIssue && data.estimatedRemainingSeconds !== null && (
         <p className="text-[11px] text-slate-500">Nog ongeveer {formatDuration(data.estimatedRemainingSeconds)}</p>
       )}
-      {isFailed && data.errorMessage && (
-        <p className="truncate text-[11px] text-red-400" title={data.errorMessage}>
+      {isTerminalWithIssue && data.errorMessage && (
+        <p className={`truncate text-[11px] ${isFailed ? "text-red-400" : "text-slate-500"}`} title={data.errorMessage}>
           {data.errorMessage}
         </p>
       )}
