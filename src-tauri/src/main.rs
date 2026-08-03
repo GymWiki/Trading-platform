@@ -77,6 +77,19 @@ async fn train_local_model(
     // required property". BTC/USDT is the fixed platform-wide default.
     const CORR_PAIR: &str = "BTC/USDT";
 
+    // The exchange local training actually pulls candles from — deliberately
+    // NOT `exchange_name` (the bot's own real trading exchange, still
+    // accepted here for API compatibility with the frontend invoke call but
+    // otherwise unused). This VM never receives real account credentials
+    // either way (see the module doc above), so there was never a reason to
+    // tie the training data source to whichever exchange the bot trades on.
+    // Must stay in sync with TRAINING_DATA_EXCHANGE in lib/hetzner.ts — same
+    // fix, same reason: Bybit's own CloudFront distribution started
+    // hard-blocking EEA IPs as part of its MiCA exit, breaking training for
+    // any Bybit-connected bot regardless of anything in this codebase.
+    const TRAINING_DATA_EXCHANGE: &str = "okx";
+    let _ = &exchange_name;
+
     let (pair_whitelist_value, pairlists_value, download_data_pairs) = if auto_select_coins {
         (
             serde_json::json!([".*/USDT"]),
@@ -125,7 +138,7 @@ async fn train_local_model(
         "dry_run": true,
         "trading_mode": "spot",
         "exchange": {
-            "name": exchange_name,
+            "name": TRAINING_DATA_EXCHANGE,
             "key": "",
             "secret": "",
             "pair_whitelist": pair_whitelist_value,

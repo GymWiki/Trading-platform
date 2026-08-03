@@ -341,6 +341,25 @@ const STAKE_CURRENCY = "USDT";
 // this is a fixed platform default rather than something derived per-bot.
 const DEFAULT_CORR_PAIRLIST = [`BTC/${STAKE_CURRENCY}`];
 
+// The exchange whose PUBLIC market data (download-data/backtesting) every
+// FreqAI training run actually reads candles from — deliberately NOT the
+// bot's own exchangeName, which is only relevant once real money moves
+// (live/paper `trade`, see buildFreqtradeCloudInit) and is the user's own
+// choice, not ours to guarantee. Training's own VM never receives real
+// account credentials in the first place (see the doc comment on
+// buildFreqAITrainingCloudInit below), so there was never a reason to tie
+// its data source to whichever exchange the bot happens to trade on.
+// Found the hard way on 2026-08-03: Bybit's own CloudFront distribution
+// started hard-blocking every EEA IP (including this platform's Hetzner
+// training VMs, hosted in Germany) as part of its MiCA exit, which made
+// every training run for a Bybit-connected bot fail at DOWNLOADING_DATA
+// regardless of anything in this codebase. OKX holds a full MiCA licence
+// (Malta) and has deep USDT pairs, making it a reliable, EEA-safe public
+// data source no matter which exchange a given bot is actually deployed
+// to. If OKX ever has its own outage/block, change this one constant —
+// every training run picks it up on its next run, no per-bot migration.
+const TRAINING_DATA_EXCHANGE = "okx";
+
 // How many of the exchange's top-liquid USDT markets VolumePairList hands
 // to FreqAI when auto-select is on — wide enough for the AI to find real
 // opportunities, small enough that feature engineering/backtesting for a
@@ -703,7 +722,10 @@ interface TrainingCloudInitParams {
 //
 // Deliberately does NOT take exchange API credentials: downloading history
 // and backtesting only need public market data, so the user's real trading
-// keys are never placed on this box.
+// keys are never placed on this box. For that same reason, the actual
+// candle data always comes from TRAINING_DATA_EXCHANGE, not params.exchangeName
+// (only still used for its static fee-table lookup) — see that constant's
+// doc comment for why.
 export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): string {
   const {
     botName,
@@ -778,7 +800,10 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     stake_amount: "unlimited",
     // Same fee simulation value as the live deploy — FreqAI training runs
     // via `backtesting`, whose fee-aware profit/ROI numbers should reflect
-    // the exchange the bot will actually be deployed to.
+    // the exchange the bot will actually be deployed to. Purely a lookup
+    // into EXCHANGE_PRESETS' static fee table, not a network call, so this
+    // is the one place the bot's REAL exchangeName still belongs even
+    // though the actual candle data below comes from TRAINING_DATA_EXCHANGE.
     fee: lookupExchangeFee(exchangeName),
     dry_run: true,
     dry_run_wallet: totalBudget,
@@ -789,7 +814,8 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     },
     trading_mode: "spot",
     exchange: {
-      name: exchangeName,
+      // See TRAINING_DATA_EXCHANGE above — never the bot's own exchangeName.
+      name: TRAINING_DATA_EXCHANGE,
       key: "",
       secret: "",
       ccxt_config: {},
