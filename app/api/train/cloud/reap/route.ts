@@ -6,6 +6,14 @@ import { deleteHetznerServer } from "@/lib/hetzner";
 import { withErrorHandling } from "@/lib/api-handler";
 
 export const dynamic = "force-dynamic";
+// Default Vercel function duration (10-15s depending on plan) is too tight
+// once this loop has more than one or two stale jobs to clean up — each
+// iteration does a real Hetzner API call (createHetznerServer's own
+// HETZNER_TIMEOUT_MS is 15s) plus a Prisma write. 60s gives enough
+// headroom for a handful of orphans in one run without the function
+// itself getting killed mid-loop, which would otherwise abandon whatever
+// server deletes hadn't happened yet until the next scheduled run.
+export const maxDuration = 60;
 
 // A TRAINING job older than this has blown well past the cloud-init
 // script's own `timeout ... 4h` ceiling (see lib/hetzner.ts maxRuntimeHours)
@@ -44,7 +52,14 @@ function isEarlyStageStale(stage: TrainingStage, stageUpdatedAt: Date, now: numb
 // untrusted bearer token.
 function isAuthorized(req: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret) return false;
+  if (!cronSecret) {
+    // Same diagnostic shape as requireHetznerToken() in lib/hetzner.ts —
+    // never log the header value itself, just confirm (server-side only,
+    // in Vercel's function logs) that our own config is the problem rather
+    // than leaving every call silently 401 with nothing to go on.
+    console.error("[train/cloud/reap] CRON_SECRET is not configured — every call will be rejected as Unauthorized.");
+    return false;
+  }
 
   const authHeader = req.headers.get("authorization");
   if (!authHeader) return false;
@@ -70,8 +85,12 @@ function isAuthorized(req: NextRequest): boolean {
 // every ~15 minutes with an `Authorization: Bearer <CRON_SECRET>` header
 // configured on the scheduler's side — deliberately not Vercel Cron, so
 // this route makes no assumption about how the request was scheduled and
-// only ever trusts a literal, exact bearer-token match.
-export const GET = withErrorHandling(async (req: NextRequest) => {
+// only ever trusts a literal, exact bearer-token match. Exported as both
+// GET and POST below since this is a pure trigger with no body to read —
+// which HTTP method the external scheduler is configured to send doesn't
+// change anything about what this does, so there's no reason to make that
+// a way for this to fail (Next.js 405s any method that isn't exported).
+const handleReap = withErrorHandling(async (req: NextRequest) => {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -134,3 +153,6 @@ export const GET = withErrorHandling(async (req: NextRequest) => {
 
   return NextResponse.json({ reaped: results.length, results });
 });
+
+export const GET = handleReap;
+export const POST = handleReap;
