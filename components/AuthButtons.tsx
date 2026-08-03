@@ -16,7 +16,12 @@ export function SignInButton() {
   );
 }
 
-export function SignOutButton() {
+// className, when passed, fully replaces the default styling instead of
+// merging with it — lets a caller in a differently-themed page (e.g. the
+// FreqPanda-styled landing page) restyle this without fighting Tailwind
+// class ordering/specificity against the default border-border/slate-400
+// classes below.
+export function SignOutButton({ className }: { className?: string }) {
   const router = useRouter();
   const [isSigningOut, setIsSigningOut] = useState(false);
 
@@ -38,7 +43,10 @@ export function SignOutButton() {
     <button
       onClick={handleSignOut}
       disabled={isSigningOut}
-      className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-slate-400 transition hover:border-red-500/50 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50"
+      className={
+        className ??
+        "rounded-lg border border-border px-4 py-2 text-sm font-medium text-slate-400 transition hover:border-red-500/50 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-50"
+      }
     >
       Sign out
     </button>

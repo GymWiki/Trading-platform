@@ -1,39 +1,47 @@
 import Link from "next/link";
+import { Manrope, Space_Grotesk, IBM_Plex_Mono } from "next/font/google";
 import { ArrowRight, Cpu, Cloud, Download, ShieldCheck, Gauge, GitBranch } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
-import { Navbar } from "@/components/Navbar";
-import { SignInButton } from "@/components/AuthButtons";
+import { SignOutButton } from "@/components/AuthButtons";
+
+// Same page-scoped FreqPanda type stack as app/platform/page.tsx — kept out
+// of app/layout.tsx so it doesn't touch typography anywhere else (the
+// dashboard/platforms/settings pages keep the app-wide Inter/JetBrains Mono
+// untouched). Landing and /platform are the two FreqPanda-branded surfaces.
+const displayFont = Space_Grotesk({ subsets: ["latin"], variable: "--font-panda-display" });
+const bodyFont = Manrope({ subsets: ["latin"], variable: "--font-panda-body" });
+const monoFont = IBM_Plex_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-panda-mono" });
 
 const FEATURES = [
   {
     icon: Cpu,
-    title: "Train Locally, For Free",
+    title: "Train gratis, lokaal",
     description:
-      "Run the Desktop App to train FreqAI models against your own GPU and Docker setup — no cloud compute bill for backtesting or hyperopt.",
+      "Train je FreqAI-model op je eigen computer via de Desktop App — geen rekenkosten voor backtesting of hyperopt.",
   },
   {
     icon: Cloud,
-    title: "Deploy to the Cloud in One Click",
+    title: "Eén klik naar de cloud",
     description:
-      "Push a trained strategy to a dedicated Hetzner VPS that trades 24/7, without keeping your own machine on.",
+      "Zet een getrainde strategie live op een eigen VPS die 24/7 doortrade, zonder dat jouw laptop aan hoeft te blijven.",
   },
   {
     icon: Gauge,
-    title: "Pay Per Bot, Not Per Seat",
+    title: "Betaal per bot",
     description:
-      "Quantity-based billing scales with the number of bots you actually run live — spin one up or down anytime.",
+      "Geen abonnement per stoel — je betaalt alleen voor de bots die je daadwerkelijk live laat draaien.",
   },
   {
     icon: ShieldCheck,
-    title: "Your Keys, Encrypted",
+    title: "Jouw sleutels, versleuteld",
     description:
-      "Exchange API credentials are encrypted at rest and only ever injected directly into your bot's container at deploy time.",
+      "Exchange-API-sleutels worden versleuteld opgeslagen en pas bij het live zetten in je bot geïnjecteerd.",
   },
   {
     icon: GitBranch,
-    title: "Paper or Live, Your Call",
+    title: "Paper of live — jij kiest",
     description:
-      "Every bot ships with a dry-run toggle so you can validate a strategy risk-free before flipping it to live trading.",
+      "Elke bot start in paper trading, zodat je een strategie risicovrij kan testen voor je 'm live zet.",
   },
 ];
 
@@ -44,104 +52,155 @@ export default async function LandingPage() {
   } = await supabase.auth.getUser();
 
   return (
-    <div className="min-h-screen bg-background">
-      <Navbar />
+    <div
+      className={`${displayFont.variable} ${bodyFont.variable} ${monoFont.variable} min-h-screen bg-panda-ink font-panda-body text-panda-cream`}
+    >
+      <header className="sticky top-0 z-50 border-b border-panda-charcoal-light bg-panda-ink/90 backdrop-blur">
+        <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
+          <Link href="/" className="flex items-center gap-2">
+            <span className="text-2xl leading-none">🐼</span>
+            <span className="font-panda-display text-lg font-semibold tracking-tight text-panda-cream">
+              FreqPanda
+            </span>
+          </Link>
+          <div className="flex items-center gap-3">
+            {user ? (
+              <>
+                <SignOutButton className="hidden text-sm font-medium text-panda-mist transition hover:text-panda-cream sm:inline" />
+                <Link
+                  href="/dashboard"
+                  className="rounded-full bg-panda-bamboo px-4 py-2 text-sm font-semibold text-panda-ink transition hover:bg-panda-bamboo-deep"
+                >
+                  Naar dashboard
+                </Link>
+              </>
+            ) : (
+              <Link
+                href="/login"
+                className="rounded-full bg-panda-bamboo px-4 py-2 text-sm font-semibold text-panda-ink transition hover:bg-panda-bamboo-deep"
+              >
+                Inloggen
+              </Link>
+            )}
+          </div>
+        </nav>
+      </header>
 
       <main>
-        <section className="mx-auto max-w-6xl px-6 pb-20 pt-24 text-center">
-          <div className="mx-auto mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-surface px-4 py-1.5 text-xs font-medium text-primary">
-            <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-            Built for Freqtrade &amp; FreqAI
-          </div>
-          <h1 className="mx-auto max-w-3xl text-4xl font-bold tracking-tight sm:text-6xl">
-            Train Locally.{" "}
-            <span className="bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-              Trade in the Cloud.
-            </span>
-          </h1>
-          <p className="mx-auto mt-6 max-w-2xl text-lg text-slate-400">
-            The Freqtrade Command Center splits the work where it belongs: heavy FreqAI model
-            training runs free on your own hardware through the Desktop App, then a single click
-            deploys the trained bot to a always-on cloud VPS you only pay for while it&apos;s live.
-          </p>
+        <section className="relative overflow-hidden px-4 pb-16 pt-14 sm:px-6 sm:pb-24 sm:pt-20">
+          {/* Soft bamboo glow — same atmospheric device as PandaHero on
+              /platform, purely decorative, sits behind the mascot. */}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-panda-bamboo/20 blur-3xl"
+          />
 
-          <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
-            {user ? (
-              <Link
-                href="/dashboard"
-                className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-background transition hover:bg-primary-hover"
-              >
-                Go to Dashboard
-                <ArrowRight className="h-4 w-4" />
-              </Link>
-            ) : (
-              <SignInButton />
-            )}
-            <a
-              href={process.env.NEXT_PUBLIC_DESKTOP_APP_WINDOWS_URL || "#"}
-              className="flex items-center gap-2 rounded-lg border border-border bg-surface px-6 py-3 text-sm font-semibold text-slate-200 transition hover:border-primary hover:text-primary"
-            >
-              <Download className="h-4 w-4" />
-              Download Desktop App (Windows/Mac)
-            </a>
-          </div>
-          <p className="mt-3 text-xs text-slate-500">
-            macOS build{" "}
-            <a
-              href={process.env.NEXT_PUBLIC_DESKTOP_APP_MAC_URL || "#"}
-              className="underline hover:text-primary"
-            >
-              available here
-            </a>{" "}
-            &middot; free, no account required to train locally
-          </p>
-        </section>
-
-        <section className="border-t border-border bg-surface/40">
-          <div className="mx-auto max-w-6xl px-6 py-20">
-            <div className="mb-12 text-center">
-              <h2 className="text-3xl font-bold tracking-tight">One workflow, two environments</h2>
-              <p className="mx-auto mt-3 max-w-xl text-slate-400">
-                Everything you need to go from strategy idea to a live, 24/7 trading bot.
+          <div className="relative mx-auto flex max-w-6xl flex-col items-center gap-10 text-center lg:flex-row lg:items-center lg:text-left">
+            <div className="max-w-xl">
+              <div className="mx-auto inline-flex items-center gap-2 rounded-full bg-panda-charcoal px-4 py-1.5 font-panda-mono text-[11px] uppercase tracking-[0.2em] text-panda-mist lg:mx-0">
+                <span className="h-1.5 w-1.5 rounded-full bg-panda-bamboo" />
+                Gebouwd op Freqtrade &amp; FreqAI
+              </div>
+              <h1 className="mt-6 font-panda-display text-4xl font-semibold leading-tight text-panda-cream sm:text-5xl lg:text-6xl">
+                Train lokaal. <span className="text-panda-bamboo">Trade in de cloud.</span>
+              </h1>
+              <p className="mt-5 text-base leading-relaxed text-panda-mist sm:text-lg">
+                FreqPanda splitst het werk waar het hoort: zware FreqAI-modellen train je gratis op
+                je eigen hardware via de Desktop App. Daarna zet één klik je bot 24/7 live op een
+                cloud-VPS — je betaalt alleen zolang die draait.
+              </p>
+              <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row lg:items-start">
+                <Link
+                  href={user ? "/dashboard" : "/login"}
+                  className="flex items-center gap-2 rounded-xl bg-panda-bamboo px-6 py-3.5 text-sm font-semibold text-panda-ink shadow-lg shadow-panda-bamboo/20 transition hover:bg-panda-bamboo-deep"
+                >
+                  {user ? "Naar dashboard" : "Inloggen"}
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+                <a
+                  href={process.env.NEXT_PUBLIC_DESKTOP_APP_WINDOWS_URL || "#"}
+                  className="flex items-center gap-2 rounded-xl bg-panda-charcoal px-6 py-3.5 text-sm font-semibold text-panda-cream transition hover:bg-panda-charcoal-light"
+                >
+                  <Download className="h-4 w-4" />
+                  Download Desktop App
+                </a>
+              </div>
+              <p className="mt-3 font-panda-mono text-xs text-panda-mist">
+                macOS-build{" "}
+                <a
+                  href={process.env.NEXT_PUBLIC_DESKTOP_APP_MAC_URL || "#"}
+                  className="underline underline-offset-2 hover:text-panda-bamboo"
+                >
+                  hier beschikbaar
+                </a>{" "}
+                &middot; gratis, geen account nodig om lokaal te trainen
               </p>
             </div>
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+
+            {/* Mascot — the same signature element as /platform's
+                PandaHero, scaled up as this page's hero visual. Swap for
+                an <img>/<video> sprite the same way once that asset lands. */}
+            <div className="relative shrink-0">
+              <div className="flex h-40 w-40 items-center justify-center rounded-full border-2 border-dashed border-panda-bamboo/40 bg-panda-charcoal text-7xl sm:h-52 sm:w-52 sm:text-8xl">
+                🐼
+              </div>
+              <div className="absolute -left-6 top-2 rounded-full bg-panda-bamboo px-3 py-1.5 text-xs font-medium text-panda-ink shadow-md sm:-left-8">
+                Ik train, jij chillt 🎋
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="border-t border-panda-charcoal-light bg-panda-charcoal/30 px-4 py-16 sm:px-6 sm:py-20">
+          <div className="mx-auto max-w-6xl">
+            <div className="mb-12 text-center">
+              <h2 className="font-panda-display text-2xl font-semibold text-panda-cream sm:text-3xl">
+                Eén workflow, twee omgevingen
+              </h2>
+              <p className="mx-auto mt-3 max-w-xl text-sm text-panda-mist sm:text-base">
+                Alles wat je nodig hebt om van strategie-idee naar een live, 24/7 tradende bot te
+                gaan.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {FEATURES.map(({ icon: Icon, title, description }) => (
-                <div key={title} className="card-surface p-6 transition hover:border-primary/40">
-                  <Icon className="h-8 w-8 text-primary" />
-                  <h3 className="mt-4 font-semibold">{title}</h3>
-                  <p className="mt-2 text-sm text-slate-400">{description}</p>
+                <div key={title} className="rounded-2xl bg-panda-charcoal p-6 transition hover:bg-panda-charcoal-light">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-panda-bamboo/15 text-panda-bamboo">
+                    <Icon className="h-5 w-5" />
+                  </div>
+                  <h3 className="mt-4 font-panda-display font-semibold text-panda-cream">{title}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-panda-mist">{description}</p>
                 </div>
               ))}
             </div>
           </div>
         </section>
 
-        <section className="mx-auto max-w-4xl px-6 py-20 text-center">
-          <h2 className="text-3xl font-bold tracking-tight">Ready to put a bot to work?</h2>
-          <p className="mx-auto mt-3 max-w-xl text-slate-400">
-            Download the Desktop App to start training for free, or jump straight into the
-            dashboard if you already have a model ready to deploy.
-          </p>
-          <div className="mt-8 flex flex-col items-center justify-center gap-4 sm:flex-row">
-            {user ? (
+        <section className="px-4 py-16 text-center sm:px-6 sm:py-20">
+          <div className="mx-auto max-w-2xl">
+            <h2 className="font-panda-display text-2xl font-semibold text-panda-cream sm:text-3xl">
+              Klaar om een bot aan het werk te zetten?
+            </h2>
+            <p className="mx-auto mt-3 max-w-xl text-sm text-panda-mist sm:text-base">
+              Download de Desktop App om gratis te beginnen met trainen, of ga direct naar het
+              dashboard als je model al klaar staat.
+            </p>
+            <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Link
-                href="/dashboard"
-                className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-background transition hover:bg-primary-hover"
+                href={user ? "/dashboard" : "/login"}
+                className="flex items-center gap-2 rounded-xl bg-panda-bamboo px-6 py-3.5 text-sm font-semibold text-panda-ink shadow-lg shadow-panda-bamboo/20 transition hover:bg-panda-bamboo-deep"
               >
-                Go to Dashboard
+                {user ? "Naar dashboard" : "Inloggen"}
                 <ArrowRight className="h-4 w-4" />
               </Link>
-            ) : (
-              <SignInButton />
-            )}
+            </div>
           </div>
         </section>
       </main>
 
-      <footer className="border-t border-border py-8 text-center text-xs text-slate-500">
-        &copy; {new Date().getFullYear()} Freqtrade Command Center. Not affiliated with the
-        Freqtrade open-source project.
+      <footer className="border-t border-panda-charcoal-light px-4 py-8 text-center font-panda-mono text-xs text-panda-mist sm:px-6">
+        &copy; {new Date().getFullYear()} FreqPanda. Niet verbonden aan het open-source
+        Freqtrade-project.
       </footer>
     </div>
   );
