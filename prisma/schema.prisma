@@ -95,6 +95,15 @@ enum TrainingStatus {
 // a smooth percentage — see that route for the exact math.
 enum TrainingStage {
   QUEUED
+  // Reported from cloud-init's `bootcmd` — the earliest possible point in
+  // the VM's life, before package_update/packages installs docker.io/curl/
+  // jq and before write_files/runcmd ever run. Exists specifically to
+  // distinguish "the VM never booted / cloud-init never started" from
+  // "it booted fine but got stuck installing packages or pulling the
+  // image" — investigated after a job sat at QUEUED (i.e. before even
+  // PULLING_IMAGE) for the entire duration of two separate incidents with
+  // no way to tell which of those it was.
+  BOOTED
   PULLING_IMAGE
   DOWNLOADING_DATA
   TRAINING

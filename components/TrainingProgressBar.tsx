@@ -7,7 +7,7 @@ interface TrainingProgressBarProps {
   jobId: string;
 }
 
-type TrainingStage = "QUEUED" | "PULLING_IMAGE" | "DOWNLOADING_DATA" | "TRAINING" | "UPLOADING" | "DONE";
+type TrainingStage = "QUEUED" | "BOOTED" | "PULLING_IMAGE" | "DOWNLOADING_DATA" | "TRAINING" | "UPLOADING" | "DONE";
 
 interface TrainingStatusResponse {
   jobId: string;
@@ -21,6 +21,7 @@ interface TrainingStatusResponse {
 
 const STAGE_LABELS: Record<TrainingStage, string> = {
   QUEUED: "In wachtrij…",
+  BOOTED: "Server opgestart…",
   PULLING_IMAGE: "Server voorbereiden…",
   DOWNLOADING_DATA: "Marktdata downloaden…",
   TRAINING: "AI-model trainen…",

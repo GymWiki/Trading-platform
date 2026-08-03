@@ -38,7 +38,7 @@ const STALE_TRAINING_HOURS = 5;
 // intermediate checkpoint to report and can legitimately take hours; that
 // stage is only bounded by STALE_TRAINING_HOURS above.
 const EARLY_STAGE_STALE_MINUTES = 20;
-const EARLY_STAGES: TrainingStage[] = ["QUEUED", "PULLING_IMAGE", "DOWNLOADING_DATA", "UPLOADING"];
+const EARLY_STAGES: TrainingStage[] = ["QUEUED", "BOOTED", "PULLING_IMAGE", "DOWNLOADING_DATA", "UPLOADING"];
 
 // Shared with the reason text below so the two can never drift apart.
 function isEarlyStageStale(stage: TrainingStage, stageUpdatedAt: Date, now: number): boolean {

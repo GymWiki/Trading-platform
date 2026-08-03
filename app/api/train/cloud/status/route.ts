@@ -28,10 +28,11 @@ const MIN_STAGE_DURATION_SECONDS = 30; // floor so a near-zero avg duration can'
 // the model file exists). Not exact per-run, which is exactly why stage
 // transitions (real) get blended with elapsed-time interpolation (estimated)
 // rather than trusting either alone.
-const STAGE_ORDER = ["QUEUED", "PULLING_IMAGE", "DOWNLOADING_DATA", "TRAINING", "UPLOADING", "DONE"] as const;
+const STAGE_ORDER = ["QUEUED", "BOOTED", "PULLING_IMAGE", "DOWNLOADING_DATA", "TRAINING", "UPLOADING", "DONE"] as const;
 type Stage = (typeof STAGE_ORDER)[number];
 const STAGE_FLOOR_PERCENT: Record<Stage, number> = {
   QUEUED: 0,
+  BOOTED: 3,
   PULLING_IMAGE: 5,
   DOWNLOADING_DATA: 15,
   TRAINING: 30,

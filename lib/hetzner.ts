@@ -884,7 +884,24 @@ report_status "COMPLETED"
 exit 0
 `;
 
+  // Runs in cloud-init's "init" stage, before package_update/packages (the
+  // apt install of docker.io/curl/jq) and before runcmd — the earliest
+  // point anything on this VM can phone home. Investigated after two
+  // separate incidents where a job sat at stage QUEUED (i.e. before even
+  // PULLING_IMAGE, the *next* checkpoint, which only fires after packages
+  // are installed) for its entire lifetime with zero information on
+  // whether the VM ever booted at all. A BOOTED report received with no
+  // PULLING_IMAGE after it narrows the failure to package
+  // install/runcmd; no BOOTED at all means the VM (or cloud-init itself)
+  // never started. Best-effort like every other report_* call — `|| true`
+  // so a failed curl here can never affect boot.
+  const bootCheckpointCmd = `curl -fsS -m 15 -X POST "${shellEscapeDouble(progressUrl)}" -H "Authorization: Bearer ${shellEscapeDouble(callbackToken)}" -H "Content-Type: application/json" -d '{"stage":"BOOTED"}' || true`;
+
   return `#cloud-config
+bootcmd:
+  - |
+    ${bootCheckpointCmd}
+
 package_update: true
 packages:
   - docker.io

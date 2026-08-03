@@ -7,7 +7,7 @@ import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 export const dynamic = "force-dynamic";
 
 const progressBodySchema = z.object({
-  stage: z.enum(["PULLING_IMAGE", "DOWNLOADING_DATA", "TRAINING", "UPLOADING", "DONE"]),
+  stage: z.enum(["BOOTED", "PULLING_IMAGE", "DOWNLOADING_DATA", "TRAINING", "UPLOADING", "DONE"]),
 });
 
 // Best-effort checkpoint the training VM's own script calls at each real
