@@ -31,11 +31,13 @@ import { GoLiveModal } from "@/components/GoLiveModal";
 import { ConnectExchangeDialog } from "@/components/ConnectExchangeDialog";
 import { TradeHistoryFeed } from "@/components/TradeHistoryFeed";
 import { TrainingProgressBar } from "@/components/TrainingProgressBar";
+import { ClientDownloadProgressBar } from "@/components/ClientDownloadProgressBar";
 import { Switch } from "@/components/ui/Switch";
 import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import { DEFAULT_PAPER_TOTAL_BUDGET, DEFAULT_PAPER_MAX_STAKE_PERCENTAGE } from "@/lib/paper-trading-defaults";
 import { isTauri } from "@/lib/tauri";
 import { apiFetch, toErrorMessage } from "@/lib/api-client";
+import { downloadAndUploadTrainingData, ClientDataDownloadError } from "@/lib/client-data-download";
 
 interface BotCardProps {
   bot: BotConfigurationDTO;
@@ -68,6 +70,18 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   // below, this is just the one-shot "yep, it started" confirmation.
   const [justStartedCloudTraining, setJustStartedCloudTraining] = useState(false);
   const justStartedCloudTrainingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Real progress for the client-side pre-fetch phase (see
+  // lib/client-data-download.ts) — null before it starts and once it's
+  // done, set only while isStartingCloudTraining covers that phase.
+  // downloadAbortControllerRef is what the "Annuleren" button below
+  // actually cancels: no TrainingJob/VPS exists yet at this point, so
+  // there's nothing for the existing job-based handleStopTraining to stop.
+  const [downloadProgress, setDownloadProgress] = useState<{ completedTasks: number; totalTasks: number } | null>(null);
+  const downloadAbortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => downloadAbortControllerRef.current?.abort();
+  }, []);
 
   // Optimistic overrides for the two network-backed toggles below: bot.X
   // only changes once the parent re-renders with a fresh prop after
@@ -245,19 +259,36 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
     }
   }
 
-  // Mode B (cloud): fire-and-forget — the VM reports back on its own via
-  // /api/train/cloud/callback. BotFleetGrid polls while a job is active and
-  // will push the updated status into this card's props.
+  // Mode B (cloud), now two phases: first the browser itself fetches every
+  // pair/timeframe's historical candles (over the user's own connection —
+  // see lib/client-data-download.ts's own doc comment for why) and uploads
+  // them to Storage, with a real progress bar; only once every file has
+  // uploaded successfully does this call POST /api/train/cloud at all —
+  // that's what guarantees no VPS (and no TrainingJob row) ever gets
+  // created for a download that failed or was cancelled partway through.
+  // Once the VM is provisioned, this is fire-and-forget again exactly like
+  // before: the VM reports back on its own via /api/train/cloud/callback,
+  // and BotFleetGrid polls while a job is active.
   async function handleStartCloudTraining() {
     setError(null);
     setIsStartingCloudTraining(true);
+    setDownloadProgress(null);
+    const controller = new AbortController();
+    downloadAbortControllerRef.current = controller;
     try {
+      const { uploadSessionId, files } = await downloadAndUploadTrainingData(bot, {
+        signal: controller.signal,
+        onProgress: (p) => setDownloadProgress({ completedTasks: p.completedTasks, totalTasks: p.totalTasks }),
+      });
+      downloadAbortControllerRef.current = null;
+      setDownloadProgress(null);
+
       const data = await apiFetch<{ job: { id: string; status: TrainingStatus; createdAt: string } }>(
         "/api/train/cloud",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ botId: bot.id }),
+          body: JSON.stringify({ botId: bot.id, uploadSessionId, preloadedFiles: files }),
         },
       );
       onUpdate({
@@ -278,10 +309,25 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
       if (justStartedCloudTrainingTimeout.current) clearTimeout(justStartedCloudTrainingTimeout.current);
       justStartedCloudTrainingTimeout.current = setTimeout(() => setJustStartedCloudTraining(false), 6000);
     } catch (err) {
-      setError(toErrorMessage(err, "Failed to start cloud training"));
+      // A cancel via the "Annuleren" button below aborts the controller,
+      // which surfaces here as this specific error — no VPS/job was ever
+      // created, so there's nothing further to undo, just go quiet.
+      if (!(err instanceof ClientDataDownloadError && controller.signal.aborted)) {
+        setError(toErrorMessage(err, "Failed to start cloud training"));
+      }
     } finally {
+      downloadAbortControllerRef.current = null;
+      setDownloadProgress(null);
       setIsStartingCloudTraining(false);
     }
+  }
+
+  // Cancels the client-side pre-fetch phase only — there is no VPS or
+  // TrainingJob yet at this point (see handleStartCloudTraining's own doc
+  // comment), so unlike handleStopTraining below, this never touches the
+  // network beyond aborting in-flight requests.
+  function handleCancelClientDownload() {
+    downloadAbortControllerRef.current?.abort();
   }
 
   // Cancels the in-flight Cloud Training job and deletes its Hetzner server
@@ -641,8 +687,27 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
               ) : (
                 <Cloud className="h-3.5 w-3.5" />
               )}
-              {jobActive ? "Training in de cloud…" : "Start Cloud Training"}
+              {jobActive ? "Training in de cloud…" : isStartingCloudTraining ? "Data ophalen…" : "Start Cloud Training"}
             </button>
+            {/* Client-side pre-fetch phase — before any VPS exists (see
+                handleStartCloudTraining). Cancelling here just aborts
+                requests, no server-side stop call needed. */}
+            {isStartingCloudTraining && downloadProgress && (
+              <>
+                <ClientDownloadProgressBar
+                  completedTasks={downloadProgress.completedTasks}
+                  totalTasks={downloadProgress.totalTasks}
+                />
+                <button
+                  type="button"
+                  onClick={handleCancelClientDownload}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-500/40 px-3 py-2 text-xs font-medium text-red-400 transition hover:bg-red-500/10"
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                  Annuleren
+                </button>
+              </>
+            )}
             {/* Own polling loop, distinct from BotFleetGrid's slower
                 fleet-wide refresh — see that component's doc comment. */}
             {jobActive && bot.latestTrainingJob && (

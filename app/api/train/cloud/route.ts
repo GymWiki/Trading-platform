@@ -16,10 +16,33 @@ export const dynamic = "force-dynamic";
 // entirely) before our own error handling ever gets a chance to run.
 export const maxDuration = 60;
 
-const startTrainingSchema = z.object({
-  botId: z.string().min(1, "botId is required"),
-  cancelOpenOrders: z.boolean().optional(),
-});
+// uploadSessionId/preloadedFiles are set only by the client-side pre-fetch
+// flow (see components/BotCard.tsx's handleStartCloudTraining and
+// lib/client-data-download.ts): the browser fetches every pair/timeframe's
+// candles itself (routed through /api/train/cloud/{markets,klines}-proxy —
+// see those routes' own doc comments for why), uploads each one via
+// POST /api/train/cloud/upload-data, and only calls this route — the one
+// that actually provisions a VPS — after every upload has succeeded. That
+// ordering is what satisfies "no half-created VPS if the client-side
+// download fails or the page closes mid-way": nothing here ever runs
+// until the browser itself decides the data is complete. preloadedFiles is
+// the browser's own record of exactly which (pair, timeframe) files it
+// uploaded — trusted only as far as which paths to look up in Storage;
+// startCloudTrainingJob still mints (and can fail on) real signed URLs for
+// each one rather than taking the browser's word that the data exists.
+const startTrainingSchema = z
+  .object({
+    botId: z.string().min(1, "botId is required"),
+    cancelOpenOrders: z.boolean().optional(),
+    uploadSessionId: z.string().uuid().optional(),
+    preloadedFiles: z
+      .array(z.object({ pair: z.string().min(1), timeframe: z.string().min(1) }))
+      .min(1)
+      .optional(),
+  })
+  .refine((v) => !!v.uploadSessionId === !!v.preloadedFiles, {
+    message: "uploadSessionId and preloadedFiles must be provided together",
+  });
 
 export const POST = withErrorHandling(async (req: NextRequest) => {
   const supabase = await createClient();
@@ -32,7 +55,7 @@ export const POST = withErrorHandling(async (req: NextRequest) => {
 
   const parsed = await parseJsonBody(req, startTrainingSchema);
   if ("error" in parsed) return parsed.error;
-  const { botId, cancelOpenOrders = false } = parsed.data;
+  const { botId, cancelOpenOrders = false, uploadSessionId, preloadedFiles } = parsed.data;
 
   const bot = await prisma.botConfiguration.findUnique({ where: { id: botId } });
   if (!bot || bot.userId !== user.id) {
@@ -43,7 +66,11 @@ export const POST = withErrorHandling(async (req: NextRequest) => {
     // If the bot is currently deployed (paper or live), this genuinely
     // pauses it via its own freqtrade API first — training/updating always
     // takes priority. See lib/train-cloud.ts.
-    const job = await startCloudTrainingJob({ bot, cancelOpenOrders });
+    const job = await startCloudTrainingJob({
+      bot,
+      cancelOpenOrders,
+      preloadedData: uploadSessionId && preloadedFiles ? { uploadSessionId, files: preloadedFiles } : undefined,
+    });
     return NextResponse.json({ job }, { status: 201 });
   } catch (err) {
     if (err instanceof TrainingBusyError) {

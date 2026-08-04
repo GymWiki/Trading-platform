@@ -1,6 +1,18 @@
 import { isSafePythonIdentifier } from "@/lib/strategy-validation";
 import type { FreqAIProfileConfig } from "@/lib/strategy-presets";
 import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
+import {
+  computeTrainingTimerangeDays,
+  computeTrainingTimerange,
+  STAKE_CURRENCY,
+  DEFAULT_CORR_PAIRLIST,
+} from "@/lib/training-timerange";
+import { pairToFreqtradeFilename } from "@/lib/freqtrade-format";
+
+// Re-exported so every existing "@/lib/hetzner" import of these keeps
+// working unchanged — see training-timerange.ts's own doc comment for why
+// the values themselves now live there instead.
+export { STAKE_CURRENCY, DEFAULT_CORR_PAIRLIST };
 
 const HETZNER_API_BASE = "https://api.hetzner.cloud/v1";
 
@@ -327,19 +339,14 @@ function writeFilesBlock(entries: Array<{ path: string; content: string; permiss
     .join("\n");
 }
 
-const STAKE_CURRENCY = "USDT";
-
-// FreqAI's own JSON schema (freqtrade/config_schema/config_schema.py) marks
-// feature_parameters.include_corr_pairlist as required, alongside
-// include_timeframes — every strategy preset implements
-// feature_engineering_expand_all/_basic, which FreqAI calls once per entry
-// here, so an empty list would just mean zero correlation features, but a
-// MISSING key fails config validation outright before training/trading ever
-// starts ("'include_corr_pairlist' is a required property"). BTC is the
-// de-facto market-wide benchmark regardless of which pairs a given bot
-// trades, and FreqAIFeatureConfig has no per-bot choice of its own here, so
-// this is a fixed platform default rather than something derived per-bot.
-const DEFAULT_CORR_PAIRLIST = [`BTC/${STAKE_CURRENCY}`];
+// STAKE_CURRENCY and DEFAULT_CORR_PAIRLIST now live in
+// lib/training-timerange.ts and are re-exported above. DEFAULT_CORR_PAIRLIST
+// backs FreqAI's required include_corr_pairlist config key
+// (freqtrade/config_schema/config_schema.py — a MISSING key fails config
+// validation outright, unlike an empty list) and, since that export, also
+// lib/client-data-download.ts's own fetch-list union — otherwise a
+// preloaded-data training run would silently be missing the one pair every
+// FreqAI feature set actually depends on.
 
 // The exchange whose PUBLIC market data (download-data/backtesting) every
 // FreqAI training run actually reads candles from — deliberately NOT the
@@ -364,9 +371,14 @@ const DEFAULT_CORR_PAIRLIST = [`BTC/${STAKE_CURRENCY}`];
 // also deep USDT pairs) are both confirmed still serving the EEA normally.
 // If either ever has its own outage/block, change these two constants —
 // every training run picks it up on its next run, no per-bot migration.
-const DATA_SOURCE_EXCHANGE = "okx";
-const DATA_SOURCE_EXCHANGE_FALLBACK = "gate";
-const DATA_SOURCE_EXCHANGES = [DATA_SOURCE_EXCHANGE, DATA_SOURCE_EXCHANGE_FALLBACK];
+// Exported so lib/market-data-client.ts (the server-side proxy behind
+// GET /api/train/cloud/markets-proxy and /klines-proxy — see that file's
+// own doc comment) fetches candles/markets from exactly these same two
+// exchanges, in the same order, rather than risking a second, separately
+// hardcoded copy drifting out of sync with this one.
+export const DATA_SOURCE_EXCHANGE = "okx";
+export const DATA_SOURCE_EXCHANGE_FALLBACK = "gate";
+export const DATA_SOURCE_EXCHANGES = [DATA_SOURCE_EXCHANGE, DATA_SOURCE_EXCHANGE_FALLBACK];
 
 // Mirrors app/api/train/cloud/reap/route.ts's own DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES
 // (kept as a separate read rather than a shared import since that route's
@@ -411,28 +423,6 @@ const AUTO_PAIRLIST_SIZE = 30;
 // primary guard.
 function lookupExchangeFee(exchangeName: string | null): number {
   return EXCHANGE_PRESETS.find((e) => e.id === exchangeName)?.takerFee ?? 0.001;
-}
-
-const TIMEFRAME_MINUTES: Record<string, number> = {
-  "1m": 1,
-  "3m": 3,
-  "5m": 5,
-  "15m": 15,
-  "30m": 30,
-  "1h": 60,
-  "2h": 120,
-  "4h": 240,
-  "6h": 360,
-  "8h": 480,
-  "12h": 720,
-  "1d": 1440,
-};
-
-// Falls back to 60 (1h) for a timeframe we don't recognize — a
-// conservative middle ground that neither wildly over- nor
-// under-estimates a download-range buffer.
-function timeframeToMinutes(timeframe: string): number {
-  return TIMEFRAME_MINUTES[timeframe] ?? 60;
 }
 
 interface PairlistConfig {
@@ -763,6 +753,25 @@ interface TrainingCloudInitParams {
   /** How much historical data to download. Defaults to a multiple of the profile's own training window, so there's always enough history to actually fill it. */
   timerangeDays?: number;
   /**
+   * When present, candle data was already fetched client-side (browser's
+   * own network, routed through /api/train/cloud/{markets,klines}-proxy —
+   * see that pair of routes' own doc comments for why a direct browser
+   * fetch to the exchange isn't possible) and uploaded to Storage before
+   * this VM was even created (see POST /api/train/cloud's own doc comment
+   * for why provisioning is deliberately deferred until every file here
+   * has uploaded successfully). Each entry's downloadUrl is a short-lived
+   * signed Storage URL the VM curls directly — one entry per (pair,
+   * timeframe) file, matching exactly what
+   * app/api/train/cloud/upload-data/route.ts wrote. When present, the
+   * entire DOWNLOADING_DATA download-data loop below is skipped in favor
+   * of just placing these files, which is also why --data-format-ohlcv
+   * json gets added to the backtesting call below only on this path: the
+   * classic download-data path still writes the freqtrade image's own
+   * default (feather), but this path writes exactly the JSON the browser
+   * sent, unconverted.
+   */
+  preloadedData?: Array<{ pair: string; timeframe: string; downloadUrl: string }>;
+  /**
    * Hard ceiling on the whole run; a `timeout`-triggered kill still fires
    * the self-destruct trap. Must stay comfortably above
    * DOWNLOAD_DATA_TIMEOUT_SECONDS alone (2h by default) plus real room for
@@ -805,26 +814,12 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     progressUrl,
     callbackToken,
     hetznerApiToken,
-    // Needs enough history to fill the training window plus backtest window
-    // several times over, or FreqAI has nothing meaningful to train on —
-    // AND, regardless of which timeframe the preset uses, enough extra at
-    // the very front of the range for every indicator/feature to be fully
-    // warmed up (startupCandleCount candles' worth, converted to real days
-    // via the base timeframe) before FreqAI's own window even starts.
-    // Insufficient warm-up produces partial-NaN features on the earliest
-    // candles — a real source of spurious training noise, independent of
-    // anything FreqAI itself learned, i.e. exactly what generously
-    // over-provisioning history here is meant to rule out.
-    timerangeDays = Math.max(
-      90,
-      (freqaiConfig.training.trainPeriodDays + freqaiConfig.training.backtestPeriodDays) * 4,
-      freqaiConfig.training.trainPeriodDays +
-        freqaiConfig.training.backtestPeriodDays +
-        Math.ceil(
-          (freqaiConfig.features.startupCandleCount * timeframeToMinutes(freqaiConfig.features.baseTimeframe)) /
-            (60 * 24),
-        ),
-    ),
+    // See computeTrainingTimerangeDays's own doc comment (lib/training-timerange.ts,
+    // shared with the client-side pre-fetch orchestrator so both agree on
+    // exactly the same download window — see lib/client-data-download.ts)
+    // for why this is generously over-provisioned rather than a tight fit.
+    timerangeDays = computeTrainingTimerangeDays(freqaiConfig),
+    preloadedData,
     // Was 4h — raised alongside DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES's default
     // (2h) so a download that legitimately uses its full allowance still
     // has real room left over for PULLING_IMAGE/TRAINING/UPLOADING
@@ -856,10 +851,7 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
   // already included there; the union+dedup below is a no-op in that case.
   const downloadDataPairs = Array.from(new Set([...pairlistConfig.pair_whitelist, ...DEFAULT_CORR_PAIRLIST]));
 
-  const today = new Date();
-  const start = new Date(today.getTime() - timerangeDays * 24 * 60 * 60 * 1000);
-  const fmt = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, "");
-  const timerange = `${fmt(start)}-${fmt(today)}`;
+  const { timerangeString: timerange } = computeTrainingTimerange(freqaiConfig, timerangeDays);
 
   const trainingConfig = {
     stake_currency: STAKE_CURRENCY,
@@ -913,6 +905,47 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     },
   };
   const configJson = JSON.stringify(trainingConfig, null, 2);
+
+  const hasPreloadedData = !!preloadedData && preloadedData.length > 0;
+
+  // Runs instead of the classic download-data loop below when the browser
+  // already fetched every (pair, timeframe) file client-side and uploaded
+  // it to Storage (see preloadedData's own doc comment above). Each entry's
+  // downloadUrl is a short-lived signed Storage URL — curl'd straight to
+  // the exact path freqtrade's own create_datadir/_pair_data_filename (see
+  // idatahandler.py/misc.py in freqtrade's source) expects it at:
+  // user_data/data/<exchange>/<pair_s>-<timeframe>.json. <exchange> here is
+  // config.json's exchange.name, which — unlike the classic path below —
+  // this script never rewrites via jq, so it stays exactly
+  // DATA_SOURCE_EXCHANGE (trainingConfig.exchange.name's initial value
+  // above). `jq empty` is a cheap sanity check that what got downloaded is
+  // actually valid JSON (a signed URL that already expired, or a network
+  // blip mid-transfer, would otherwise only surface much later as an
+  // opaque FreqAI "no data found" failure during TRAINING instead of here).
+  const preloadedDataScript = hasPreloadedData
+    ? `mkdir -p "user_data/data/${shellEscapeDouble(DATA_SOURCE_EXCHANGE)}"
+${preloadedData!
+  .map(({ pair, timeframe, downloadUrl }) => {
+    const destPath = `user_data/data/${DATA_SOURCE_EXCHANGE}/${pairToFreqtradeFilename(pair)}-${timeframe}.json`;
+    const safePair = shellEscapeDouble(pair);
+    const safeTimeframe = shellEscapeDouble(timeframe);
+    const safeDestPath = shellEscapeDouble(destPath);
+    return `echo "=== placing preloaded data: ${safePair} ${safeTimeframe} ===" | tee -a "$TRAIN_LOG"
+curl -fsS -m 120 -o "${safeDestPath}" "${shellEscapeDouble(downloadUrl)}" || fail "failed to download preloaded data for ${safePair} ${safeTimeframe}"
+jq empty "${safeDestPath}" || fail "preloaded data file for ${safePair} ${safeTimeframe} is not valid JSON"`;
+  })
+  .join("\n")}
+echo "=== all ${preloadedData!.length} preloaded data file(s) placed ===" | tee -a "$TRAIN_LOG"`
+    : "";
+
+  // Only added to the backtesting call below when preloaded data is in
+  // play: the classic download-data path (default branch) writes the
+  // freqtrade image's own default format (feather), while this path writes
+  // exactly the JSON the browser sent, unconverted — see --data-format-ohlcv
+  // in freqtrade's ARGS_COMMON_OPTIMIZE (shared between download-data and
+  // backtesting) for why this flag alone is enough to make backtesting read
+  // JSON instead of assuming feather.
+  const backtestingDataFormatFlag = hasPreloadedData ? ` --data-format-ohlcv json` : "";
 
   // Every value that came from user-editable bot fields is escaped before
   // being embedded in a bash double-quoted assignment (see shellEscapeDouble
@@ -1018,7 +1051,10 @@ report_stage "PULLING_IMAGE"
 docker pull ${FREQTRADE_DOCKER_IMAGE} 2>&1 | tee -a "$TRAIN_LOG" || fail "could not pull freqtrade image"
 
 report_stage "DOWNLOADING_DATA"
-# --timeframes (plural) is the only flag download-data actually accepts —
+${
+  hasPreloadedData
+    ? preloadedDataScript
+    : `# --timeframes (plural) is the only flag download-data actually accepts —
 # ARGS_DOWNLOAD_DATA in freqtrade's own commands/arguments.py has no
 # "timeframe" (singular) entry at all, unlike backtesting below. Passing
 # every entry in include_timeframes (not just the base one) here also
@@ -1058,12 +1094,13 @@ for data_source in ${DATA_SOURCE_EXCHANGES.map((ds) => `"${shellEscapeDouble(ds)
     echo "=== download-data failed via '$data_source' ===" | tee -a "$TRAIN_LOG"
   fi
 done
-[ "$DOWNLOAD_OK" -eq 1 ] || fail "historical data download failed against every data source (tried: ${DATA_SOURCE_EXCHANGES.join(", ")}) — see last output above for the last pairs reached"
+[ "$DOWNLOAD_OK" -eq 1 ] || fail "historical data download failed against every data source (tried: ${DATA_SOURCE_EXCHANGES.join(", ")}) — see last output above for the last pairs reached"`
+}
 
 report_stage "TRAINING"
 docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data ${FREQTRADE_DOCKER_IMAGE} \\
   backtesting --config user_data/config.json --strategy "$STRATEGY" \\
-  --freqaimodel "$FREQAI_MODEL" --timerange "$TIMERANGE" \\
+  --freqaimodel "$FREQAI_MODEL" --timerange "$TIMERANGE"${backtestingDataFormatFlag} \\
   2>&1 | tee -a "$TRAIN_LOG" || fail "FreqAI training (via backtesting) failed"
 
 MODEL_COUNT=$(find user_data/models -name '*.joblib' 2>/dev/null | wc -l)
