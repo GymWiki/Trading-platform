@@ -117,6 +117,16 @@ export function TrainingProgressBar({ jobId }: TrainingProgressBarProps) {
       {!isDone && !isTerminalWithIssue && data.estimatedRemainingSeconds !== null && (
         <p className="text-[11px] text-slate-500">Nog ongeveer {formatDuration(data.estimatedRemainingSeconds)}</p>
       )}
+      {/* Marktdata downloaden voor een bot met automatische coin-selectie
+          kan realistisch tot ~2 uur duren (elk actief USDT-paar op de
+          exchange, niet alleen de paren die uiteindelijk verhandeld
+          worden) — zonder deze toelichting oogt een percentage dat een
+          tijdlang nauwelijks beweegt al snel als vastgelopen. */}
+      {!isDone && !isTerminalWithIssue && data.stage === "DOWNLOADING_DATA" && (
+        <p className="text-[11px] text-slate-500">
+          Dit kan bij automatische coin-selectie realistisch tot ~2 uur duren.
+        </p>
+      )}
       {/* Full message, wrapped — never truncated. A reap/callback reason
           like "Reaped: no progress past QUEUED for over 20 minutes — ..."
           is exactly the part that explains what happened. */}
