@@ -26,15 +26,17 @@ export const maxDuration = 60;
 // long.
 const STALE_TRAINING_HOURS = 5;
 
-// QUEUED/PULLING_IMAGE/DOWNLOADING_DATA/UPLOADING are all normally a low
-// single-digit number of minutes each (docker pull, a candle-data download,
-// an upload of one .joblib file) — nothing about them scales with dataset
-// or model size the way the TRAINING stage itself does, so a real report_stage()
-// gap this long past stageUpdatedAt means the VM's own script has hung or
-// the VM never finished booting cloud-init at all, not that it's just slow.
-// TRAINING itself is deliberately excluded — freqtrade's backtesting run has
-// no intermediate checkpoint to report and can legitimately take hours; that
-// stage is only bounded by STALE_TRAINING_HOURS above.
+// QUEUED/PULLING_IMAGE/UPLOADING are all normally a low single-digit number
+// of minutes each (VM boot, docker pull, an upload of one .joblib file) —
+// nothing about them scales with dataset or model size the way TRAINING
+// itself (or, since it was found to genuinely need much longer — see
+// DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES below — DOWNLOADING_DATA) does. A real
+// report_stage() gap this long past stageUpdatedAt on one of these three
+// means the VM's own script has hung or the VM never finished booting
+// cloud-init at all, not that it's just slow. TRAINING itself is separately
+// excluded — freqtrade's backtesting run has no intermediate checkpoint to
+// report and can legitimately take hours; that stage is only bounded by
+// STALE_TRAINING_HOURS above.
 //
 // Configurable (was hardcoded) so it can be tuned without a redeploy —
 // default matches the value already in production. Investigated a report
@@ -42,7 +44,30 @@ const STALE_TRAINING_HOURS = 5;
 // wasn't — see the doc comment on isEarlyStageStale below for the actual
 // cause that was found instead, which this timeout has no effect on.
 const TRAINING_QUEUE_TIMEOUT_MINUTES = Number(process.env.TRAINING_QUEUE_TIMEOUT_MINUTES) || 20;
-const EARLY_STAGES: TrainingStage[] = ["QUEUED", "BOOTED", "PULLING_IMAGE", "DOWNLOADING_DATA", "UPLOADING"];
+
+// DOWNLOADING_DATA split out from the fast stages below (2026-08-03): for an
+// auto-select bot, download-data's own pair list is the wildcard ".*/USDT"
+// — freqtrade's own documented way to make a dynamic VolumePairList
+// backtestable (see docs/data-download.md) — which expands to every active
+// USDT pair on the exchange, not just the ~30 a live/dry-run instance would
+// ever actually trade. Combined with ~90 days of candles across multiple
+// timeframes, and freqtrade's own download loop being fully sequential
+// per (pair, timeframe) whenever the requested range doesn't fit in a
+// single API call (which 90 days at 5m/15m never does — see
+// _download_all_pairs_history_parallel in freqtrade's history_utils.py),
+// this can legitimately take well over an hour. Mirrored into
+// DOWNLOAD_DATA_TIMEOUT_SECONDS in lib/hetzner.ts, which fires 5 minutes
+// before this one so the training script self-reports (with the last
+// pairs it reached) instead of this route's own blind kill.
+const DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES = Number(process.env.DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES) || 120;
+
+const FAST_EARLY_STAGES: TrainingStage[] = ["QUEUED", "BOOTED", "PULLING_IMAGE", "UPLOADING"];
+const SLOW_EARLY_STAGES: TrainingStage[] = ["DOWNLOADING_DATA"];
+const EARLY_STAGES: TrainingStage[] = [...FAST_EARLY_STAGES, ...SLOW_EARLY_STAGES];
+
+function earlyStageTimeoutMinutesFor(stage: TrainingStage): number {
+  return SLOW_EARLY_STAGES.includes(stage) ? DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES : TRAINING_QUEUE_TIMEOUT_MINUTES;
+}
 
 // Shared with the reason text below so the two can never drift apart.
 //
@@ -71,7 +96,7 @@ const EARLY_STAGES: TrainingStage[] = ["QUEUED", "BOOTED", "PULLING_IMAGE", "DOW
 // reported back even though the VM demonstrably reaches the internet
 // fine (its self-destruct call to Hetzner's API succeeds).
 function isEarlyStageStale(stage: TrainingStage, stageUpdatedAt: Date, now: number): boolean {
-  return EARLY_STAGES.includes(stage) && now - stageUpdatedAt.getTime() > TRAINING_QUEUE_TIMEOUT_MINUTES * 60 * 1000;
+  return EARLY_STAGES.includes(stage) && now - stageUpdatedAt.getTime() > earlyStageTimeoutMinutesFor(stage) * 60 * 1000;
 }
 
 // Plain string comparison would leak timing information about how many
@@ -133,10 +158,13 @@ const handleReap = withErrorHandling(async (req: NextRequest) => {
 
   const now = Date.now();
   const staleCutoff = new Date(now - STALE_TRAINING_HOURS * 60 * 60 * 1000);
-  const earlyStaleCutoff = new Date(now - TRAINING_QUEUE_TIMEOUT_MINUTES * 60 * 1000);
+  const fastEarlyStaleCutoff = new Date(now - TRAINING_QUEUE_TIMEOUT_MINUTES * 60 * 1000);
+  const downloadDataStaleCutoff = new Date(now - DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES * 60 * 1000);
   console.log(
     `[train/cloud/reap] run started at ${new Date(now).toISOString()} — ` +
-      `TRAINING_QUEUE_TIMEOUT_MINUTES=${TRAINING_QUEUE_TIMEOUT_MINUTES}, STALE_TRAINING_HOURS=${STALE_TRAINING_HOURS}`,
+      `TRAINING_QUEUE_TIMEOUT_MINUTES=${TRAINING_QUEUE_TIMEOUT_MINUTES}, ` +
+      `DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES=${DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES}, ` +
+      `STALE_TRAINING_HOURS=${STALE_TRAINING_HOURS}`,
   );
 
   const orphans = await prisma.trainingJob.findMany({
@@ -144,7 +172,8 @@ const handleReap = withErrorHandling(async (req: NextRequest) => {
       hetznerServerId: { not: null },
       OR: [
         { status: "TRAINING", updatedAt: { lt: staleCutoff } },
-        { status: "TRAINING", stage: { in: EARLY_STAGES }, stageUpdatedAt: { lt: earlyStaleCutoff } },
+        { status: "TRAINING", stage: { in: FAST_EARLY_STAGES }, stageUpdatedAt: { lt: fastEarlyStaleCutoff } },
+        { status: "TRAINING", stage: { in: SLOW_EARLY_STAGES }, stageUpdatedAt: { lt: downloadDataStaleCutoff } },
         // Also sweeps up a CANCELLED job (POST /api/train/cloud/stop) whose
         // own Hetzner delete call failed and left hetznerServerId set —
         // that route deliberately keeps it set in exactly that case so
@@ -160,8 +189,9 @@ const handleReap = withErrorHandling(async (req: NextRequest) => {
     if (!job.hetznerServerId) continue;
 
     const earlyStale = isEarlyStageStale(job.stage, job.stageUpdatedAt, now);
+    const stageTimeoutMinutes = earlyStageTimeoutMinutesFor(job.stage);
     const staleReason = earlyStale
-      ? `Reaped: no progress past ${job.stage} for over ${TRAINING_QUEUE_TIMEOUT_MINUTES} minutes — the training VM likely crashed or never finished booting`
+      ? `Reaped: no progress past ${job.stage} for over ${stageTimeoutMinutes} minutes — the training VM likely crashed or never finished booting`
       : "Reaped: exceeded max training runtime";
     const isStale = job.status === "TRAINING";
 
@@ -174,7 +204,7 @@ const handleReap = withErrorHandling(async (req: NextRequest) => {
     console.log(
       `[train/cloud/reap] job ${job.id}: status=${job.status} stage=${job.stage} ` +
         `age=${ageMinutes}min sinceStageUpdate=${sinceStageMinutes}min ` +
-        `earlyStageTimeout=${TRAINING_QUEUE_TIMEOUT_MINUTES}min staleTrainingTimeout=${STALE_TRAINING_HOURS}h ` +
+        `earlyStageTimeout=${stageTimeoutMinutes}min staleTrainingTimeout=${STALE_TRAINING_HOURS}h ` +
         `-> ${isStale ? `REAP (${staleReason})` : "cleanup only (already terminal, just clearing hetznerServerId)"}`,
     );
 
@@ -221,7 +251,7 @@ const handleReap = withErrorHandling(async (req: NextRequest) => {
   // exactly here — no server, nothing to delete — would otherwise be
   // invisible to this cron forever.
   const stuckQueued = await prisma.trainingJob.findMany({
-    where: { status: "QUEUED", createdAt: { lt: earlyStaleCutoff } },
+    where: { status: "QUEUED", createdAt: { lt: fastEarlyStaleCutoff } },
   });
   for (const job of stuckQueued) {
     const reason =

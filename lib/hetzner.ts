@@ -360,19 +360,26 @@ const DEFAULT_CORR_PAIRLIST = [`BTC/${STAKE_CURRENCY}`];
 // every training run picks it up on its next run, no per-bot migration.
 const TRAINING_DATA_EXCHANGE = "okx";
 
-// Mirrors app/api/train/cloud/reap/route.ts's own env var (kept as a
-// separate read rather than a shared import since that route's copy governs
-// the external reap cron, while this one only sizes the internal
-// download-data timeout below) — carved out of the same budget, minus a
-// safety margin, so a legitimately slow download self-reports FAILED, with
-// the pairs it got through before running out of time (via TRAIN_LOG's
-// tail — see fail() below), well before the external reap cron's blind
-// kill at the full window. A hard-killed VM never runs its own EXIT trap,
-// so without this, a slow download degrades all the way to reap's generic
-// "no progress" message with zero diagnostic info, no matter how much we
-// log — this makes the training script itself the one that reports first.
-const TRAINING_QUEUE_TIMEOUT_MINUTES = Number(process.env.TRAINING_QUEUE_TIMEOUT_MINUTES) || 20;
-const DOWNLOAD_DATA_TIMEOUT_SECONDS = Math.max(60, (TRAINING_QUEUE_TIMEOUT_MINUTES - 5) * 60);
+// Mirrors app/api/train/cloud/reap/route.ts's own DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES
+// (kept as a separate read rather than a shared import since that route's
+// copy governs the external reap cron, while this one only sizes the
+// internal download-data timeout below) — carved out of the same budget,
+// minus a safety margin, so a legitimately slow download self-reports
+// FAILED, with the pairs it got through before running out of time (via
+// TRAIN_LOG's tail — see fail() below), well before the external reap
+// cron's blind kill at the full window. A hard-killed VM never runs its own
+// EXIT trap, so without this, a slow download degrades all the way to
+// reap's generic "no progress" message with zero diagnostic info, no
+// matter how much we log — this makes the training script itself the one
+// that reports first. Default (120 min) sized for an auto-select bot's
+// wildcard ".*/USDT" download (see reap route's own doc comment on
+// DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES for the full reasoning) — every
+// active USDT pair on the exchange, not just the ~30 a live/dry-run
+// instance actually trades, downloaded fully sequentially per
+// (pair, timeframe) since a 90-day/5m+15m range never fits in freqtrade's
+// single-call "fast parallel" path.
+const DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES = Number(process.env.DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES) || 120;
+const DOWNLOAD_DATA_TIMEOUT_SECONDS = Math.max(60, (DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES - 5) * 60);
 
 // How many of the exchange's top-liquid USDT markets VolumePairList hands
 // to FreqAI when auto-select is on — wide enough for the AI to find real
@@ -721,7 +728,13 @@ interface TrainingCloudInitParams {
   hetznerApiToken: string;
   /** How much historical data to download. Defaults to a multiple of the profile's own training window, so there's always enough history to actually fill it. */
   timerangeDays?: number;
-  /** Hard ceiling on the whole run; a `timeout`-triggered kill still fires the self-destruct trap. */
+  /**
+   * Hard ceiling on the whole run; a `timeout`-triggered kill still fires
+   * the self-destruct trap. Must stay comfortably above
+   * DOWNLOAD_DATA_TIMEOUT_SECONDS alone (2h by default) plus real room for
+   * PULLING_IMAGE/TRAINING/UPLOADING after it, or this outer wrapper could
+   * kill an otherwise-healthy, still-progressing run.
+   */
   maxRuntimeHours?: number;
 }
 
@@ -777,7 +790,12 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
             (60 * 24),
         ),
     ),
-    maxRuntimeHours = 4,
+    // Was 4h — raised alongside DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES's default
+    // (2h) so a download that legitimately uses its full allowance still
+    // has real room left over for PULLING_IMAGE/TRAINING/UPLOADING
+    // afterward, rather than this outer wrapper cutting off an otherwise-
+    // healthy run right as the download step finishes.
+    maxRuntimeHours = 6,
   } = params;
 
   assertSafePythonIdentifier(strategy, "strategy");
