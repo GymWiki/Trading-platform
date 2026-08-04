@@ -38,6 +38,14 @@ import { DEFAULT_PAPER_TOTAL_BUDGET, DEFAULT_PAPER_MAX_STAKE_PERCENTAGE } from "
 import { isTauri } from "@/lib/tauri";
 import { apiFetch, toErrorMessage } from "@/lib/api-client";
 import { downloadAndUploadTrainingData, ClientDataDownloadError } from "@/lib/client-data-download";
+import {
+  buildPrefetchPlan,
+  isBackgroundFetchSupported,
+  isBackgroundFetchWorthwhile,
+  startBackgroundFetchDownload,
+  formatBytes,
+} from "@/lib/background-fetch-download";
+import { getPendingDownload, clearPendingDownload, type PendingDownload } from "@/lib/training-data-db";
 
 interface BotCardProps {
   bot: BotConfigurationDTO;
@@ -78,10 +86,61 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   // there's nothing for the existing job-based handleStopTraining to stop.
   const [downloadProgress, setDownloadProgress] = useState<{ completedTasks: number; totalTasks: number } | null>(null);
   const downloadAbortControllerRef = useRef<AbortController | null>(null);
+  // Set right before falling back to the foreground path, so the UI can
+  // explain *why* — "your browser doesn't support this" reads very
+  // differently from "too many pairs for one background job" even though
+  // both land on the same code path. Null whenever the background-fetch
+  // path is in play (nothing to explain).
+  const [foregroundFallbackReason, setForegroundFallbackReason] = useState<string | null>(null);
+
+  // Live state for a Background Fetch registration created by THIS tab in
+  // THIS session — lost on reload/navigation, which is fine: the actual
+  // source of truth for "did it finish" is IndexedDB (pendingDownload
+  // below) + the service worker's own postMessage, not this ref.
+  const [backgroundFetchRegistration, setBackgroundFetchRegistration] = useState<BackgroundFetchRegistration | null>(null);
+  const [backgroundFetchDownloadedBytes, setBackgroundFetchDownloadedBytes] = useState(0);
+
+  // A background download that finished — possibly while this tab, or any
+  // tab, was closed — discovered via IndexedDB on mount and/or a live
+  // postMessage from the service worker if a fetch finishes while this
+  // card happens to be mounted. Deliberately requires an explicit click to
+  // actually start training (handleConfirmBackgroundDownload) rather than
+  // auto-provisioning a VPS the instant this fires — the user might not be
+  // looking, possibly hours later.
+  const [pendingDownload, setPendingDownload] = useState<PendingDownload | null>(null);
+  const [isConfirmingBackgroundDownload, setIsConfirmingBackgroundDownload] = useState(false);
 
   useEffect(() => {
     return () => downloadAbortControllerRef.current?.abort();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    getPendingDownload(bot.id).then((record) => {
+      if (!cancelled && record) setPendingDownload(record);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [bot.id]);
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    function handleMessage(event: MessageEvent) {
+      const data = event.data;
+      if (data && data.type === "training-data-ready" && data.botId === bot.id) {
+        setPendingDownload({
+          botId: data.botId,
+          uploadSessionId: data.uploadSessionId,
+          files: data.files,
+          completedAt: data.completedAt,
+        });
+        setBackgroundFetchRegistration(null);
+      }
+    }
+    navigator.serviceWorker.addEventListener("message", handleMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", handleMessage);
+  }, [bot.id]);
 
   // Optimistic overrides for the two network-backed toggles below: bot.X
   // only changes once the parent re-renders with a fresh prop after
@@ -259,60 +318,101 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
     }
   }
 
-  // Mode B (cloud), now two phases: first the browser itself fetches every
-  // pair/timeframe's historical candles (over the user's own connection —
-  // see lib/client-data-download.ts's own doc comment for why) and uploads
-  // them to Storage, with a real progress bar; only once every file has
-  // uploaded successfully does this call POST /api/train/cloud at all —
-  // that's what guarantees no VPS (and no TrainingJob row) ever gets
+  // Actually calls POST /api/train/cloud once preloaded data is ready —
+  // shared by both the foreground path (right after its own download
+  // finishes) and handleConfirmBackgroundDownload (once the user confirms
+  // a background download that already finished, possibly in an earlier
+  // session). Only ever reachable once every file has uploaded
+  // successfully, which is what guarantees no VPS/TrainingJob ever gets
   // created for a download that failed or was cancelled partway through.
-  // Once the VM is provisioned, this is fire-and-forget again exactly like
-  // before: the VM reports back on its own via /api/train/cloud/callback,
-  // and BotFleetGrid polls while a job is active.
+  async function submitPreloadedTraining(uploadSessionId: string, files: Array<{ pair: string; timeframe: string }>) {
+    const data = await apiFetch<{ job: { id: string; status: TrainingStatus; createdAt: string } }>(
+      "/api/train/cloud",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ botId: bot.id, uploadSessionId, preloadedFiles: files }),
+      },
+    );
+    onUpdate({
+      ...bot,
+      trainingMode: "CLOUD",
+      latestTrainingJob: {
+        id: data.job.id,
+        status: data.job.status,
+        mode: "CLOUD",
+        errorMessage: null,
+        createdAt: data.job.createdAt,
+      },
+    });
+    setJustStartedCloudTraining(true);
+    if (justStartedCloudTrainingTimeout.current) clearTimeout(justStartedCloudTrainingTimeout.current);
+    justStartedCloudTrainingTimeout.current = setTimeout(() => setJustStartedCloudTraining(false), 6000);
+  }
+
+  // Mode B (cloud): first the browser fetches every pair/timeframe's
+  // historical candles itself (over the user's own connection) and
+  // uploads them to Storage; only once every file has uploaded
+  // successfully does anything call POST /api/train/cloud (via
+  // submitPreloadedTraining above) and actually provision a VPS.
+  //
+  // Two ways that download can run:
+  //  - Background Fetch (Chrome/Edge, Android + desktop — see the chat
+  //    reply alongside this feature for the full support matrix): the
+  //    browser's own download manager drives it, so it survives this tab
+  //    closing or the user switching apps. This function then just
+  //    *starts* it and returns — completion is discovered later via
+  //    public/sw.js's postMessage (if a tab is open) or the pendingDownload
+  //    IndexedDB check on mount (if not), never awaited here directly.
+  //  - The foreground path (lib/client-data-download.ts) otherwise —
+  //    Safari/iOS, Firefox, or a plan with more pair/timeframe pages than
+  //    MAX_BACKGROUND_FETCH_REQUESTS. This one only keeps running while
+  //    this tab stays open, which is why isStartingCloudTraining's button
+  //    label and foregroundFallbackReason's notice both call that out.
   async function handleStartCloudTraining() {
     setError(null);
     setIsStartingCloudTraining(true);
     setDownloadProgress(null);
-    const controller = new AbortController();
-    downloadAbortControllerRef.current = controller;
+    setForegroundFallbackReason(null);
+
     try {
+      if (isBackgroundFetchSupported()) {
+        const plan = await buildPrefetchPlan(bot);
+        if (isBackgroundFetchWorthwhile(plan)) {
+          const uploadSessionId = crypto.randomUUID();
+          const registration = await startBackgroundFetchDownload(bot.id, bot.botName, uploadSessionId, plan);
+          setBackgroundFetchRegistration(registration);
+          setBackgroundFetchDownloadedBytes(0);
+          registration.onprogress = () => setBackgroundFetchDownloadedBytes(registration.downloaded);
+          setIsStartingCloudTraining(false);
+          return;
+        }
+        setForegroundFallbackReason(
+          `Te veel bestanden (${plan.requests.length}) voor één achtergrond-download — normale download wordt gebruikt.`,
+        );
+      } else {
+        setForegroundFallbackReason(
+          "Achtergronddownload wordt niet ondersteund in deze browser — houd deze pagina open tijdens het downloaden.",
+        );
+      }
+
+      const controller = new AbortController();
+      downloadAbortControllerRef.current = controller;
       const { uploadSessionId, files } = await downloadAndUploadTrainingData(bot, {
         signal: controller.signal,
         onProgress: (p) => setDownloadProgress({ completedTasks: p.completedTasks, totalTasks: p.totalTasks }),
       });
       downloadAbortControllerRef.current = null;
       setDownloadProgress(null);
-
-      const data = await apiFetch<{ job: { id: string; status: TrainingStatus; createdAt: string } }>(
-        "/api/train/cloud",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ botId: bot.id, uploadSessionId, preloadedFiles: files }),
-        },
-      );
-      onUpdate({
-        ...bot,
-        trainingMode: "CLOUD",
-        latestTrainingJob: {
-          id: data.job.id,
-          status: data.job.status,
-          mode: "CLOUD",
-          errorMessage: null,
-          createdAt: data.job.createdAt,
-        },
-      });
-      // Only reachable once the call above actually succeeded — a click
-      // that fails (network error, busy bot, etc.) hits the catch below
-      // and never shows this.
-      setJustStartedCloudTraining(true);
-      if (justStartedCloudTrainingTimeout.current) clearTimeout(justStartedCloudTrainingTimeout.current);
-      justStartedCloudTrainingTimeout.current = setTimeout(() => setJustStartedCloudTraining(false), 6000);
+      await submitPreloadedTraining(uploadSessionId, files);
     } catch (err) {
       // A cancel via the "Annuleren" button below aborts the controller,
       // which surfaces here as this specific error — no VPS/job was ever
-      // created, so there's nothing further to undo, just go quiet.
-      if (!(err instanceof ClientDataDownloadError && controller.signal.aborted)) {
+      // created, so there's nothing further to undo, just go quiet. Any
+      // OTHER ClientDataDownloadError (no data found, an upload that
+      // actually failed, ...) is a real failure and still needs to reach
+      // the user, same as any other error here.
+      if (!(err instanceof ClientDataDownloadError && err.message === "Download geannuleerd.")) {
         setError(toErrorMessage(err, "Failed to start cloud training"));
       }
     } finally {
@@ -328,6 +428,33 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   // network beyond aborting in-flight requests.
   function handleCancelClientDownload() {
     downloadAbortControllerRef.current?.abort();
+  }
+
+  function handleCancelBackgroundFetch() {
+    backgroundFetchRegistration?.abort();
+    setBackgroundFetchRegistration(null);
+  }
+
+  // The user confirms a Background Fetch that already finished — see
+  // pendingDownload's own doc comment for why this is a deliberate click
+  // rather than automatic.
+  async function handleConfirmBackgroundDownload() {
+    if (!pendingDownload) return;
+    setError(null);
+    setIsConfirmingBackgroundDownload(true);
+    try {
+      await submitPreloadedTraining(pendingDownload.uploadSessionId, pendingDownload.files);
+      await clearPendingDownload(bot.id);
+      setPendingDownload(null);
+    } catch (err) {
+      setError(toErrorMessage(err, "Kon de training niet starten met de opgehaalde data"));
+    } finally {
+      setIsConfirmingBackgroundDownload(false);
+    }
+  }
+
+  function handleDismissPendingDownload() {
+    clearPendingDownload(bot.id).then(() => setPendingDownload(null));
   }
 
   // Cancels the in-flight Cloud Training job and deletes its Hetzner server
@@ -676,10 +803,44 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
 
         {bot.trainingMode === "CLOUD" ? (
           <>
+            {/* A Background Fetch finished — possibly while this tab, or
+                every tab, was closed (see pendingDownload's own doc
+                comment for why this needs an explicit click rather than
+                auto-starting). Shown ahead of everything else below since
+                it's actionable regardless of what state the rest of the
+                card is in. */}
+            {pendingDownload && !jobActive && (
+              <div className="space-y-1.5 rounded-lg border border-primary/40 bg-primary/10 p-2.5">
+                <p className="text-[11px] font-medium text-primary">
+                  Marktdata is op de achtergrond opgehaald ({pendingDownload.files.length} bestanden) — klaar om te
+                  trainen.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleConfirmBackgroundDownload}
+                    disabled={isConfirmingBackgroundDownload}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-background transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isConfirmingBackgroundDownload ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Cloud className="h-3.5 w-3.5" />}
+                    Training starten
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDismissPendingDownload}
+                    disabled={isConfirmingBackgroundDownload}
+                    className="rounded-lg border border-border px-3 py-2 text-xs font-medium text-slate-400 transition hover:bg-surfaceHover disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Negeren
+                  </button>
+                </div>
+              </div>
+            )}
+
             <button
               type="button"
               onClick={handleStartCloudTraining}
-              disabled={isStartingCloudTraining || jobActive}
+              disabled={isStartingCloudTraining || jobActive || !!backgroundFetchRegistration}
               className="flex w-full items-center justify-center gap-2 rounded-lg border border-primary/40 px-3 py-2 text-xs font-medium text-primary transition hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isStartingCloudTraining || jobActive ? (
@@ -687,13 +848,45 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
               ) : (
                 <Cloud className="h-3.5 w-3.5" />
               )}
-              {jobActive ? "Training in de cloud…" : isStartingCloudTraining ? "Data ophalen…" : "Start Cloud Training"}
+              {jobActive
+                ? "Training in de cloud…"
+                : backgroundFetchRegistration
+                  ? "Data wordt op de achtergrond opgehaald…"
+                  : isStartingCloudTraining
+                    ? "Data ophalen…"
+                    : "Start Cloud Training"}
             </button>
+
+            {/* Background Fetch in progress — survives this tab closing or
+                the user switching apps (see
+                lib/background-fetch-download.ts). downloaded is bytes, not
+                a task count — Background Fetch doesn't expose a reliable
+                "N of M requests done" count, only bytes transferred, which
+                is also exactly what the browser's own system notification
+                is built around. */}
+            {backgroundFetchRegistration && (
+              <div className="space-y-1.5 rounded-lg border border-border bg-background p-2.5">
+                <p className="text-[11px] text-slate-400">
+                  {formatBytes(backgroundFetchDownloadedBytes)} opgehaald. Je kunt deze pagina sluiten of naar een
+                  andere app schakelen — de systeemmelding houdt je op de hoogte.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleCancelBackgroundFetch}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-red-500/40 px-3 py-2 text-xs font-medium text-red-400 transition hover:bg-red-500/10"
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                  Annuleren
+                </button>
+              </div>
+            )}
+
             {/* Client-side pre-fetch phase — before any VPS exists (see
                 handleStartCloudTraining). Cancelling here just aborts
                 requests, no server-side stop call needed. */}
             {isStartingCloudTraining && downloadProgress && (
               <>
+                {foregroundFallbackReason && <p className="text-[11px] text-accent">{foregroundFallbackReason}</p>}
                 <ClientDownloadProgressBar
                   completedTasks={downloadProgress.completedTasks}
                   totalTasks={downloadProgress.totalTasks}
