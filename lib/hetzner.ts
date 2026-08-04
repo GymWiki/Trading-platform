@@ -360,6 +360,20 @@ const DEFAULT_CORR_PAIRLIST = [`BTC/${STAKE_CURRENCY}`];
 // every training run picks it up on its next run, no per-bot migration.
 const TRAINING_DATA_EXCHANGE = "okx";
 
+// Mirrors app/api/train/cloud/reap/route.ts's own env var (kept as a
+// separate read rather than a shared import since that route's copy governs
+// the external reap cron, while this one only sizes the internal
+// download-data timeout below) — carved out of the same budget, minus a
+// safety margin, so a legitimately slow download self-reports FAILED, with
+// the pairs it got through before running out of time (via TRAIN_LOG's
+// tail — see fail() below), well before the external reap cron's blind
+// kill at the full window. A hard-killed VM never runs its own EXIT trap,
+// so without this, a slow download degrades all the way to reap's generic
+// "no progress" message with zero diagnostic info, no matter how much we
+// log — this makes the training script itself the one that reports first.
+const TRAINING_QUEUE_TIMEOUT_MINUTES = Number(process.env.TRAINING_QUEUE_TIMEOUT_MINUTES) || 20;
+const DOWNLOAD_DATA_TIMEOUT_SECONDS = Math.max(60, (TRAINING_QUEUE_TIMEOUT_MINUTES - 5) * 60);
+
 // How many of the exchange's top-liquid USDT markets VolumePairList hands
 // to FreqAI when auto-select is on — wide enough for the AI to find real
 // opportunities, small enough that feature engineering/backtesting for a
@@ -769,7 +783,6 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
   assertSafePythonIdentifier(strategy, "strategy");
 
   const safeBotName = botName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
-  const timeframe = freqaiConfig.features.baseTimeframe;
   const pairlistConfig = buildPairlistConfig(autoSelectCoins, pairWhitelist);
 
   // download-data only fetches config["pairs"], which freqtrade defaults to
@@ -949,10 +962,24 @@ report_stage "PULLING_IMAGE"
 docker pull ${FREQTRADE_DOCKER_IMAGE} 2>&1 | tee -a "$TRAIN_LOG" || fail "could not pull freqtrade image"
 
 report_stage "DOWNLOADING_DATA"
-docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data ${FREQTRADE_DOCKER_IMAGE} \\
-  download-data --config user_data/config.json --timerange "$TIMERANGE" --timeframe "${shellEscapeDouble(timeframe)}" \\
+# --timeframes (plural) is the only flag download-data actually accepts —
+# ARGS_DOWNLOAD_DATA in freqtrade's own commands/arguments.py has no
+# "timeframe" (singular) entry at all, unlike backtesting below. Passing
+# every entry in include_timeframes (not just the base one) here also
+# closes a separate gap: FreqAI's feature_engineering_expand_*() pulls
+# candles for every include_timeframes entry, which were never downloaded
+# for anything past the first one before this. Wrapped in "timeout" — see
+# DOWNLOAD_DATA_TIMEOUT_SECONDS above — since download-data has no
+# per-pair timeout of its own, and downloading a VolumePairList-driven
+# ".*/USDT" wildcard, freqtrade's own documented way to support a dynamic
+# pairlist in backtesting, really can mean every active USDT pair on the
+# exchange, not just the top N a live/dry-run instance would ever actually
+# pick.
+timeout ${DOWNLOAD_DATA_TIMEOUT_SECONDS} docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data ${FREQTRADE_DOCKER_IMAGE} \\
+  download-data --config user_data/config.json --timerange "$TIMERANGE" \\
+  --timeframes ${freqaiConfig.features.includeTimeframes.map((tf) => `"${shellEscapeDouble(tf)}"`).join(" ")} \\
   --pairs ${downloadDataPairs.map((p) => `"${shellEscapeDouble(p)}"`).join(" ")} \\
-  2>&1 | tee -a "$TRAIN_LOG" || fail "historical data download failed"
+  2>&1 | tee -a "$TRAIN_LOG" || fail "historical data download failed (possibly timed out after ${DOWNLOAD_DATA_TIMEOUT_SECONDS}s — see last output below for the last pairs it reached)"
 
 report_stage "TRAINING"
 docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data ${FREQTRADE_DOCKER_IMAGE} \\

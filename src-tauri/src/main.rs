@@ -158,8 +158,12 @@ async fn train_local_model(
     std::fs::write(user_data_dir.join("config.json"), config_json)
         .map_err(|e| format!("could not write config.json: {e}"))?;
 
+    // "--timeframes" (plural) is the only flag download-data actually
+    // accepts — freqtrade's own ARGS_DOWNLOAD_DATA has no singular
+    // "timeframe" entry, unlike backtesting below. Must stay in sync with
+    // the same fix in lib/hetzner.ts.
     let mut download_data_args: Vec<&str> =
-        vec!["download-data", "--config", "user_data/config.json", "--timeframe", "5m", "--pairs"];
+        vec!["download-data", "--config", "user_data/config.json", "--timeframes", "5m", "--pairs"];
     download_data_args.extend(download_data_pairs.iter().map(|p| p.as_str()));
     run_freqtrade_step(&app, &bot_id, &work_dir, &download_data_args).await?;
 
