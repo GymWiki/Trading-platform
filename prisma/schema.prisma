@@ -223,13 +223,16 @@ model BotConfiguration {
 
   botName String @map("bot_name")
 
-  // Which exchange this bot trains and trades against — chosen at creation
-  // time (which public OHLCV feed to train on) and immutable afterward,
-  // independent of whether a real account is ever linked. The back-relation
-  // to this bot's own ExchangeConnection (see that model) is optional and
-  // only needs to exist once the user connects an account, which itself is
-  // only required at the Go Live gate — see app/api/bots/[id]/golive.
-  exchangeName       String              @map("exchange_name")
+  // Which exchange this bot trades against — null until the user connects a
+  // real account (see ExchangeConnection below), which is when it gets set
+  // (and stays immutable afterward). No longer chosen at bot-creation time:
+  // training and paper trading never needed a real exchange to begin with
+  // (see DATA_SOURCE_EXCHANGE in lib/hetzner.ts — a fixed, EEA-safe public
+  // data source, decoupled from whatever exchange this bot eventually
+  // connects to), so there was nothing to require upfront. Only actually
+  // required — and only once verified — at the Go Live gate, see
+  // app/api/bots/[id]/golive.
+  exchangeName       String?             @map("exchange_name")
   exchangeConnection ExchangeConnection?
 
   strategy String

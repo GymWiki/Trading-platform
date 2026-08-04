@@ -36,7 +36,10 @@ export interface ExchangeConnectionDTO {
 export interface BotConfigurationDTO {
   id: string;
   botName: string;
-  exchangeName: string;
+  // Null until the user connects a real exchange account (see
+  // exchangeConnection below) — no exchange is chosen at bot-creation time
+  // anymore. Set (and immutable) once exchangeConnection first exists.
+  exchangeName: string | null;
   // This bot's own linked account (see prisma/schema.prisma
   // ExchangeConnection) — null until the user connects one. Never required
   // for training or paper trading, only for going live (see

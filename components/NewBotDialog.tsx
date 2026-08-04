@@ -4,11 +4,9 @@ import { useId, useState, type FormEvent } from "react";
 import { Loader2, Plus, X } from "lucide-react";
 import type { BotConfigurationDTO } from "@/lib/types";
 import { InfoTooltip } from "@/components/ui/Tooltip";
-import { ExchangeCombobox } from "@/components/ui/ExchangeCombobox";
 import { StrategyPicker } from "@/components/ui/StrategyPicker";
 import { PairSelector } from "@/components/ui/PairSelector";
 import { Switch } from "@/components/ui/Switch";
-import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import { STRATEGY_PRESETS, type StrategyPreset } from "@/lib/strategy-presets";
 import { apiFetch, toErrorMessage } from "@/lib/api-client";
 
@@ -20,17 +18,17 @@ const DEFAULT_STRATEGY = STRATEGY_PRESETS[0];
 
 const EMPTY_FORM = {
   botName: "",
-  exchangeName: EXCHANGE_PRESETS[0].id,
   strategyId: DEFAULT_STRATEGY.id,
   autoSelectCoins: true,
   pairs: ["BTC/USDT", "ETH/USDT"] as string[],
 };
 
-// No exchange-account (API key/secret) step anymore — a bot only needs to
-// know which exchange's public market data to train and paper-trade
-// against (see lib/deploy-bot.ts, lib/hetzner.ts). Linking a real,
-// verified account is a separate step on the bot's own card, required
-// only when the user actually wants to go live.
+// No exchange choice here at all — training and paper trading run against
+// a fixed public data source (see DATA_SOURCE_EXCHANGE in lib/hetzner.ts),
+// decoupled from any exchange this bot might eventually connect to. The
+// exchange itself only gets picked later, on the bot's own card, at the
+// "Koppel exchange account" step (see ConnectExchangeDialog) — required
+// only once the user actually wants to go live.
 export function NewBotDialog({ onCreated }: NewBotDialogProps) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -39,7 +37,6 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
 
   const selectedStrategy: StrategyPreset =
     STRATEGY_PRESETS.find((s) => s.id === form.strategyId) ?? DEFAULT_STRATEGY;
-  const selectedExchange = EXCHANGE_PRESETS.find((e) => e.id === form.exchangeName);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -57,7 +54,6 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           botName: form.botName,
-          exchangeName: form.exchangeName,
           strategy: selectedStrategy.className,
           strategyCode: selectedStrategy.code,
           freqaiConfig: selectedStrategy.freqaiConfig,
@@ -116,22 +112,6 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
               />
             </Field>
 
-            <FieldGroup
-              label="Exchange"
-              tooltip="Welke exchange z'n publieke marktdata deze bot traint en paper-traded op. Een echt account koppel je later, per bot, alleen als je live wilt gaan."
-            >
-              <ExchangeCombobox
-                value={form.exchangeName}
-                onChange={(exchangeName) => setForm({ ...form, exchangeName })}
-                aria-label="Exchange"
-              />
-              {selectedExchange && (
-                <p className="mt-2 rounded-lg bg-background px-3 py-2 text-[11px] leading-relaxed text-slate-400">
-                  {selectedExchange.feeNote}
-                </p>
-              )}
-            </FieldGroup>
-
             <FieldGroup label="AI-gedrag">
               <StrategyPicker
                 selectedId={form.strategyId}
@@ -155,9 +135,9 @@ export function NewBotDialog({ onCreated }: NewBotDialogProps) {
 
                 {form.autoSelectCoins ? (
                   <p className="rounded-lg bg-background px-3 py-2 text-[11px] leading-relaxed text-slate-400">
-                    De bot scant dynamisch de top-liquide markten op{" "}
-                    <span className="text-slate-300">{selectedExchange?.label ?? "je exchange"}</span> en laat de
-                    AI handelen waar de kansen het grootst zijn.
+                    De bot scant dynamisch de top-liquide markten en laat de AI handelen waar de kansen het
+                    grootst zijn. Welke exchange dat precies is, kies je later — bij het koppelen van je
+                    exchange-account.
                   </p>
                 ) : (
                   <PairSelector selected={form.pairs} onChange={(pairs) => setForm({ ...form, pairs })} />

@@ -4,7 +4,6 @@ import type { Prisma } from "@prisma/client";
 import { createClient } from "@/lib/supabase/server";
 import { prisma } from "@/lib/prisma";
 import { botSelect, toBotDTO } from "@/lib/bot-select";
-import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import {
   isSafePythonIdentifier,
   strategyCodeDefinesClass,
@@ -15,21 +14,20 @@ import { withErrorHandling, parseJsonBody } from "@/lib/api-handler";
 
 export const dynamic = "force-dynamic";
 
-// Closed list, not free text — matches the exchange picker in
-// components/NewBotDialog.tsx exactly, same boundary EXCHANGE_PRESETS
-// already enforced for the old exchangeConnectionId flow.
-const exchangeIds = EXCHANGE_PRESETS.map((e) => e.id);
-
 // freqaiConfig's exact shape is validated separately by isValidFreqAIConfig
 // (see lib/strategy-validation.ts) — Zod only needs to confirm it's an
 // object here, not re-encode every nested field as a second schema.
+//
+// No exchange choice here at all anymore — training and paper trading
+// don't need one (see DATA_SOURCE_EXCHANGE in lib/hetzner.ts, a fixed
+// public data source decoupled from any bot's own exchange). A bot's
+// exchangeName (nullable — see prisma/schema.prisma) only gets set once
+// the user connects a real account, via app/api/bots/[id]/exchange-connection,
+// which is also where the exchange itself now gets chosen. A real,
+// verified account is only ever required at the Go Live gate
+// (app/api/bots/[id]/golive).
 const createBotBodySchema = z.object({
   botName: z.string().trim().min(1, "botName is required"),
-  // No connection required at creation — training and paper trading only
-  // ever need this exchange's public market data (see lib/deploy-bot.ts,
-  // lib/hetzner.ts). A real, verified account is only required later, at
-  // the Go Live gate (app/api/bots/[id]/golive).
-  exchangeName: z.string().refine((v) => exchangeIds.includes(v), { message: "exchangeName is not a supported exchange" }),
   strategy: z.string().min(1, "strategy is required"),
   strategyCode: z.string().min(1, "strategyCode is required"),
   freqaiConfig: z.record(z.string(), z.unknown()),
@@ -66,7 +64,7 @@ export const POST = withErrorHandling(async (req: NextRequest) => {
 
   const parsed = await parseJsonBody(req, createBotBodySchema);
   if ("error" in parsed) return parsed.error;
-  const { botName, exchangeName, strategy, strategyCode, freqaiConfig, autoSelectCoins, pairWhitelist } = parsed.data;
+  const { botName, strategy, strategyCode, freqaiConfig, autoSelectCoins, pairWhitelist } = parsed.data;
 
   // Defaults to on (matches BotConfiguration.autoSelectCoins @default(true))
   // — an explicit false is the only way to require a manual whitelist.
@@ -120,7 +118,9 @@ export const POST = withErrorHandling(async (req: NextRequest) => {
     data: {
       userId: user.id,
       botName,
-      exchangeName,
+      // Null until the user connects a real exchange account (see
+      // app/api/bots/[id]/exchange-connection) — no exchange choice at
+      // creation time anymore.
       strategy,
       strategyCode,
       freqaiConfig: freqaiConfig as Prisma.InputJsonValue,

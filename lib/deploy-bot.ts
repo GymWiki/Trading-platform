@@ -96,7 +96,7 @@ export async function deployBotToVps({ bot, supabase }: DeployBotParams) {
   if (bot.autoCompound && liveConnection) {
     const budget = bot.totalBudget ?? DEFAULT_PAPER_TOTAL_BUDGET;
     try {
-      const balance = await fetchFreeBalance(bot.exchangeName, decrypt(liveConnection.apiKey), decrypt(liveConnection.apiSecret));
+      const balance = await fetchFreeBalance(liveConnection.exchangeName, decrypt(liveConnection.apiKey), decrypt(liveConnection.apiSecret));
       if (balance.amount > 0) {
         tradableBalanceRatio = Math.min(
           MAX_TRADABLE_BALANCE_RATIO,

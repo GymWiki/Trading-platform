@@ -77,17 +77,24 @@ async fn train_local_model(
     // required property". BTC/USDT is the fixed platform-wide default.
     const CORR_PAIR: &str = "BTC/USDT";
 
-    // The exchange local training actually pulls candles from — deliberately
-    // NOT `exchange_name` (the bot's own real trading exchange, still
-    // accepted here for API compatibility with the frontend invoke call but
-    // otherwise unused). This VM never receives real account credentials
-    // either way (see the module doc above), so there was never a reason to
-    // tie the training data source to whichever exchange the bot trades on.
-    // Must stay in sync with TRAINING_DATA_EXCHANGE in lib/hetzner.ts — same
-    // fix, same reason: Bybit's own CloudFront distribution started
-    // hard-blocking EEA IPs as part of its MiCA exit, breaking training for
-    // any Bybit-connected bot regardless of anything in this codebase.
-    const TRAINING_DATA_EXCHANGE: &str = "okx";
+    // The exchange(s) local training actually pulls candles from —
+    // deliberately NOT `exchange_name` (the bot's own real trading
+    // exchange, still accepted here for API compatibility with the
+    // frontend invoke call but otherwise unused). This process never
+    // touches real account credentials either way (see the module doc
+    // above), so there was never a reason to tie the training data source
+    // to whichever exchange the bot trades on. Must stay in sync with
+    // DATA_SOURCE_EXCHANGE(S) in lib/hetzner.ts — same fix, same reason:
+    // Bybit's own CloudFront distribution started hard-blocking EEA IPs as
+    // part of its MiCA exit, breaking training for any Bybit-connected bot
+    // regardless of anything in this codebase. Binance was ruled out too —
+    // it failed to secure its own MiCA licence and began suspending EU
+    // services around the same time. OKX (Malta MiCA licence) and Gate.io
+    // (Malta CASP authorization) both confirmed still serving the EEA
+    // normally, tried in that order below.
+    const DATA_SOURCE_EXCHANGE: &str = "okx";
+    const DATA_SOURCE_EXCHANGE_FALLBACK: &str = "gate";
+    const DATA_SOURCE_EXCHANGES: [&str; 2] = [DATA_SOURCE_EXCHANGE, DATA_SOURCE_EXCHANGE_FALLBACK];
     let _ = &exchange_name;
 
     let (pair_whitelist_value, pairlists_value, download_data_pairs) = if auto_select_coins {
@@ -138,7 +145,10 @@ async fn train_local_model(
         "dry_run": true,
         "trading_mode": "spot",
         "exchange": {
-            "name": TRAINING_DATA_EXCHANGE,
+            // Starting value only — rewritten before each download-data
+            // attempt below, cycling through DATA_SOURCE_EXCHANGES if the
+            // primary source fails.
+            "name": DATA_SOURCE_EXCHANGE,
             "key": "",
             "secret": "",
             "pair_whitelist": pair_whitelist_value,
@@ -154,18 +164,51 @@ async fn train_local_model(
             "data_split_parameters": { "test_size": 0.25 }
         }
     });
-    let config_json = serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?;
-    std::fs::write(user_data_dir.join("config.json"), config_json)
-        .map_err(|e| format!("could not write config.json: {e}"))?;
 
     // "--timeframes" (plural) is the only flag download-data actually
     // accepts — freqtrade's own ARGS_DOWNLOAD_DATA has no singular
     // "timeframe" entry, unlike backtesting below. Must stay in sync with
     // the same fix in lib/hetzner.ts.
-    let mut download_data_args: Vec<&str> =
-        vec!["download-data", "--config", "user_data/config.json", "--timeframes", "5m", "--pairs"];
-    download_data_args.extend(download_data_pairs.iter().map(|p| p.as_str()));
-    run_freqtrade_step(&app, &bot_id, &work_dir, &download_data_args).await?;
+    //
+    // Tries each data source in order — config.json's exchange.name is
+    // rewritten (never pair_whitelist/pairlists) before every attempt, so
+    // this can never make the bot actually trade on whichever source it
+    // happened to download candles from. Whichever config.json is left on
+    // disk after this loop (the one from the successful attempt) is what
+    // backtesting below actually trains against.
+    let mut download_ok = false;
+    let mut last_download_err = String::new();
+    for data_source in DATA_SOURCE_EXCHANGES {
+        let _ = app.emit(
+            "training-progress",
+            TrainingProgress {
+                bot_id: bot_id.clone(),
+                line: format!("=== download-data: trying data source '{data_source}' ==="),
+            },
+        );
+        let mut source_config = config.clone();
+        source_config["exchange"]["name"] = serde_json::json!(data_source);
+        let source_config_json = serde_json::to_vec_pretty(&source_config).map_err(|e| e.to_string())?;
+        std::fs::write(user_data_dir.join("config.json"), source_config_json)
+            .map_err(|e| format!("could not write config.json: {e}"))?;
+
+        let mut download_data_args: Vec<&str> =
+            vec!["download-data", "--config", "user_data/config.json", "--timeframes", "5m", "--pairs"];
+        download_data_args.extend(download_data_pairs.iter().map(|p| p.as_str()));
+        match run_freqtrade_step(&app, &bot_id, &work_dir, &download_data_args).await {
+            Ok(()) => {
+                download_ok = true;
+                break;
+            }
+            Err(e) => last_download_err = e,
+        }
+    }
+    if !download_ok {
+        return Err(format!(
+            "historical data download failed against every data source (tried: {}): {last_download_err}",
+            DATA_SOURCE_EXCHANGES.join(", ")
+        ));
+    }
 
     run_freqtrade_step(
         &app,

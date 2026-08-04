@@ -225,7 +225,11 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
         botId: bot.id,
         strategy: bot.strategy,
         strategyCode: bot.strategyCode,
-        exchangeName: bot.exchangeName,
+        // Rust's own train_local_model ignores this anyway — see
+        // DATA_SOURCE_EXCHANGE in src-tauri/src/main.rs — but the Tauri
+        // command's String param can't take null, and a bot may not have
+        // an exchange yet (see prisma/schema.prisma).
+        exchangeName: bot.exchangeName ?? "",
         autoSelectCoins: bot.autoSelectCoins,
         pairWhitelist: bot.pairWhitelist ?? "",
       });
@@ -415,7 +419,8 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
         <div>
           <h3 className="font-semibold">{bot.botName}</h3>
           <p className="text-xs text-slate-400">
-            {bot.exchangeName} &middot; {bot.strategy}
+            {bot.exchangeName ? <>{bot.exchangeName} &middot; </> : null}
+            {bot.strategy}
           </p>
           {bot.totalBudget !== null && bot.maxStakePercentage !== null ? (
             <p className="mt-0.5 text-[11px] text-slate-500">

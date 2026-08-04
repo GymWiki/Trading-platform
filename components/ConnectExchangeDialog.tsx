@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { Loader2, X } from "lucide-react";
 import { InfoTooltip } from "@/components/ui/Tooltip";
+import { ExchangeCombobox } from "@/components/ui/ExchangeCombobox";
 import { EXCHANGE_PRESETS } from "@/lib/exchange-presets";
 import type { ExchangeConnectionDTO } from "@/lib/types";
 import type { FreeBalance } from "@/lib/ccxt-client";
@@ -11,26 +12,32 @@ import { apiFetch, toErrorMessage } from "@/lib/api-client";
 interface ConnectExchangeDialogProps {
   botId: string;
   botName: string;
-  exchangeName: string;
+  // Null the first time a bot connects an account — nothing chose an
+  // exchange for it at creation anymore (see prisma/schema.prisma). Once
+  // set, it's immutable, so every later "Vervang" call reuses it and skips
+  // the picker below.
+  exchangeName: string | null;
   onConnected: (connection: ExchangeConnectionDTO) => void;
   onClose: () => void;
 }
 
 // Bot-scoped equivalent of the old, now-removed /platforms "Platform
-// koppelen" dialog — same shape (exchange + API key/secret), but the
-// exchange itself isn't a choice here: it's fixed to this bot's own
-// (immutable) exchangeName, since ExchangeConnection.botId is now unique
-// (see prisma/schema.prisma) and a bot's linked account must match the
-// exchange it already trains/paper-trades against. POST validates the
-// credentials with a real balance call before saving anything — see
+// koppelen" dialog — same shape (exchange + API key/secret). The exchange
+// itself is only a choice here the very first time: once ExchangeConnection
+// exists (botId is unique — see prisma/schema.prisma), the bot's
+// exchangeName is fixed, and every later "Vervang" call reuses it rather
+// than showing the picker again. POST validates the credentials with a
+// real balance call before saving anything — see
 // app/api/bots/[id]/exchange-connection.
 export function ConnectExchangeDialog({ botId, botName, exchangeName, onConnected, onClose }: ConnectExchangeDialogProps) {
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
+  const [pickedExchangeName, setPickedExchangeName] = useState(exchangeName ?? EXCHANGE_PRESETS[0].id);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const preset = EXCHANGE_PRESETS.find((e) => e.id === exchangeName);
+  const effectiveExchangeName = exchangeName ?? pickedExchangeName;
+  const preset = EXCHANGE_PRESETS.find((e) => e.id === effectiveExchangeName);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -42,7 +49,11 @@ export function ConnectExchangeDialog({ botId, botName, exchangeName, onConnecte
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ apiKey, apiSecret }),
+          body: JSON.stringify({
+            apiKey,
+            apiSecret,
+            ...(exchangeName === null && { exchangeName: pickedExchangeName }),
+          }),
         },
       );
       onConnected(data.connection);
@@ -61,7 +72,10 @@ export function ConnectExchangeDialog({ botId, botName, exchangeName, onConnecte
           <div>
             <h2 className="font-semibold">Exchange-account koppelen</h2>
             <p className="text-xs text-slate-400">
-              Voor {botName} op {preset?.label ?? exchangeName} — alleen voor deze bot, niet gedeeld met andere bots.
+              {exchangeName
+                ? `Voor ${botName} op ${preset?.label ?? exchangeName}`
+                : `Voor ${botName} — kies eerst de exchange`}{" "}
+              — alleen voor deze bot, niet gedeeld met andere bots.
             </p>
           </div>
           <button
@@ -75,6 +89,16 @@ export function ConnectExchangeDialog({ botId, botName, exchangeName, onConnecte
 
         <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+            {exchangeName === null && (
+              <label className="block">
+                <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-400">
+                  Exchange
+                  <InfoTooltip text="Welke exchange dit account bij hoort. Kan hierna niet meer gewijzigd worden voor deze bot." />
+                </span>
+                <ExchangeCombobox value={pickedExchangeName} onChange={setPickedExchangeName} aria-label="Exchange" />
+              </label>
+            )}
+
             {preset && (
               <p className="rounded-lg bg-background px-3 py-2 text-[11px] leading-relaxed text-slate-400">
                 {preset.feeNote}

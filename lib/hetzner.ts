@@ -343,22 +343,30 @@ const DEFAULT_CORR_PAIRLIST = [`BTC/${STAKE_CURRENCY}`];
 
 // The exchange whose PUBLIC market data (download-data/backtesting) every
 // FreqAI training run actually reads candles from — deliberately NOT the
-// bot's own exchangeName, which is only relevant once real money moves
-// (live/paper `trade`, see buildFreqtradeCloudInit) and is the user's own
-// choice, not ours to guarantee. Training's own VM never receives real
-// account credentials in the first place (see the doc comment on
-// buildFreqAITrainingCloudInit below), so there was never a reason to tie
-// its data source to whichever exchange the bot happens to trade on.
-// Found the hard way on 2026-08-03: Bybit's own CloudFront distribution
-// started hard-blocking every EEA IP (including this platform's Hetzner
-// training VMs, hosted in Germany) as part of its MiCA exit, which made
-// every training run for a Bybit-connected bot fail at DOWNLOADING_DATA
-// regardless of anything in this codebase. OKX holds a full MiCA licence
-// (Malta) and has deep USDT pairs, making it a reliable, EEA-safe public
-// data source no matter which exchange a given bot is actually deployed
-// to. If OKX ever has its own outage/block, change this one constant —
+// bot's own exchangeName (which may not even be set yet — see Bot.exchangeName
+// in prisma/schema.prisma, nullable until a real ExchangeConnection is
+// linked), which is only relevant once real money moves (live `trade`, see
+// buildFreqtradeCloudInit) and is the user's own choice, not ours to
+// guarantee. Training's own VM never receives real account credentials in
+// the first place (see the doc comment on buildFreqAITrainingCloudInit
+// below), so there was never a reason to tie its data source to whichever
+// exchange the bot happens to trade on.
+//
+// NOT Binance/Bybit, deliberately, despite being the more obvious/common
+// default picks: Bybit's own CloudFront distribution started hard-blocking
+// every EEA IP (including this platform's Hetzner training VMs, hosted in
+// Germany) on 2026-08-03 as part of its MiCA exit — the exact failure this
+// constant exists to route around, discovered when it was still hardcoded
+// as the bot's own exchange. Binance failed to secure its own MiCA licence
+// and began suspending EU services around the same time (found via live
+// research, so worth re-verifying if this ever needs revisiting). OKX (Malta
+// MiCA licence, deep USDT pairs) and Gate.io (Malta CASP authorization,
+// also deep USDT pairs) are both confirmed still serving the EEA normally.
+// If either ever has its own outage/block, change these two constants —
 // every training run picks it up on its next run, no per-bot migration.
-const TRAINING_DATA_EXCHANGE = "okx";
+const DATA_SOURCE_EXCHANGE = "okx";
+const DATA_SOURCE_EXCHANGE_FALLBACK = "gate";
+const DATA_SOURCE_EXCHANGES = [DATA_SOURCE_EXCHANGE, DATA_SOURCE_EXCHANGE_FALLBACK];
 
 // Mirrors app/api/train/cloud/reap/route.ts's own DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES
 // (kept as a separate read rather than a shared import since that route's
@@ -380,6 +388,14 @@ const TRAINING_DATA_EXCHANGE = "okx";
 // single-call "fast parallel" path.
 const DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES = Number(process.env.DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES) || 120;
 const DOWNLOAD_DATA_TIMEOUT_SECONDS = Math.max(60, (DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES - 5) * 60);
+// DOWNLOAD_DATA_TIMEOUT_SECONDS split evenly across DATA_SOURCE_EXCHANGES so
+// trying the fallback after the primary fails still fits inside the same
+// overall budget the reap cron expects, rather than potentially doubling
+// the total wait.
+const DOWNLOAD_DATA_ATTEMPT_TIMEOUT_SECONDS = Math.max(
+  30,
+  Math.floor(DOWNLOAD_DATA_TIMEOUT_SECONDS / DATA_SOURCE_EXCHANGES.length),
+);
 
 // How many of the exchange's top-liquid USDT markets VolumePairList hands
 // to FreqAI when auto-select is on — wide enough for the AI to find real
@@ -393,7 +409,7 @@ const AUTO_PAIRLIST_SIZE = 30;
 // exchange somehow isn't in our list — app/api/bots/route.ts already
 // rejects that at creation time, so this is defense in depth, not the
 // primary guard.
-function lookupExchangeFee(exchangeName: string): number {
+function lookupExchangeFee(exchangeName: string | null): number {
   return EXCHANGE_PRESETS.find((e) => e.id === exchangeName)?.takerFee ?? 0.001;
 }
 
@@ -459,7 +475,15 @@ function buildPairlistConfig(autoSelectCoins: boolean, pairWhitelist: string[]):
 
 interface CloudInitParams {
   botName: string;
-  exchangeName: string;
+  /**
+   * Null until a real ExchangeConnection is linked (see Bot.exchangeName in
+   * prisma/schema.prisma — a bot no longer picks an exchange at creation).
+   * Falls back to DATA_SOURCE_EXCHANGE below when null, which only
+   * legitimately happens for paper trading (live trading requires a
+   * verified connection — see lib/deploy-bot.ts's own guard — which always
+   * sets this alongside itself, see app/api/bots/[id]/exchange-connection).
+   */
+  exchangeName: string | null;
   exchangeApiKey: string;
   exchangeApiSecret: string;
   strategy: string;
@@ -548,6 +572,15 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
   assertSafePythonIdentifier(strategy, "strategy");
   const safeBotName = botName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
   const pairlistConfig = buildPairlistConfig(autoSelectCoins, pairWhitelist);
+  // A bot only ever reaches here with exchangeName null while paper
+  // trading (live requires a verified ExchangeConnection, which always
+  // sets it — see the CloudInitParams doc comment above) — falls back to
+  // the same fixed, EEA-safe public data source training uses, so a
+  // brand-new bot with no connection yet still paper-trades against real
+  // market data instead of failing outright. Once a connection exists
+  // (even while still paper trading, for a realistic dry-run), this is
+  // always the bot's own real exchange again.
+  const effectiveExchangeName = exchangeName ?? DATA_SOURCE_EXCHANGE;
 
   const freqtradeConfig = {
     max_open_trades: 5,
@@ -563,7 +596,7 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
     // may not match the exchange the user actually picked, understating
     // or overstating how much a scalping strategy's paper P&L would
     // really keep after costs.
-    fee: lookupExchangeFee(exchangeName),
+    fee: lookupExchangeFee(effectiveExchangeName),
     dry_run: isPaperTrading,
     dry_run_wallet: totalBudget,
     cancel_open_orders_on_exit: false,
@@ -585,7 +618,7 @@ export function buildFreqtradeCloudInit(params: CloudInitParams): string {
     // defaults to 0.99 on its own.
     ...(tradableBalanceRatio !== undefined && { tradable_balance_ratio: tradableBalanceRatio }),
     exchange: {
-      name: exchangeName,
+      name: effectiveExchangeName,
       key: exchangeApiKey,
       secret: exchangeApiSecret,
       ccxt_config: {},
@@ -698,7 +731,8 @@ function shellEscapeDouble(value: string): string {
 
 interface TrainingCloudInitParams {
   botName: string;
-  exchangeName: string;
+  /** Only ever used for its static fee-table lookup below — see DATA_SOURCE_EXCHANGE's doc comment for why training's actual candle data never depends on this. May be null (see Bot.exchangeName in prisma/schema.prisma). */
+  exchangeName: string | null;
   strategy: string;
   strategyCode: string;
   /** Every bot runs FreqAI — drives the training window, feature set, and downloaded history range. */
@@ -750,9 +784,10 @@ interface TrainingCloudInitParams {
 // Deliberately does NOT take exchange API credentials: downloading history
 // and backtesting only need public market data, so the user's real trading
 // keys are never placed on this box. For that same reason, the actual
-// candle data always comes from TRAINING_DATA_EXCHANGE, not params.exchangeName
-// (only still used for its static fee-table lookup) — see that constant's
-// doc comment for why.
+// candle data always comes from DATA_SOURCE_EXCHANGE (with
+// DATA_SOURCE_EXCHANGE_FALLBACK retried on failure), never params.exchangeName
+// (only still used for its static fee-table lookup, and may be null anyway)
+// — see DATA_SOURCE_EXCHANGE's doc comment for why.
 export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): string {
   const {
     botName,
@@ -834,7 +869,7 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     // the exchange the bot will actually be deployed to. Purely a lookup
     // into EXCHANGE_PRESETS' static fee table, not a network call, so this
     // is the one place the bot's REAL exchangeName still belongs even
-    // though the actual candle data below comes from TRAINING_DATA_EXCHANGE.
+    // though the actual candle data below comes from DATA_SOURCE_EXCHANGE.
     fee: lookupExchangeFee(exchangeName),
     dry_run: true,
     dry_run_wallet: totalBudget,
@@ -845,8 +880,11 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     },
     trading_mode: "spot",
     exchange: {
-      // See TRAINING_DATA_EXCHANGE above — never the bot's own exchangeName.
-      name: TRAINING_DATA_EXCHANGE,
+      // Starting value only — the training script itself rewrites this
+      // in-place (via jq) before each download-data attempt, cycling
+      // through DATA_SOURCE_EXCHANGES if the primary source fails. Never
+      // the bot's own exchangeName; see DATA_SOURCE_EXCHANGE's doc comment.
+      name: DATA_SOURCE_EXCHANGE,
       key: "",
       secret: "",
       ccxt_config: {},
@@ -986,18 +1024,41 @@ report_stage "DOWNLOADING_DATA"
 # every entry in include_timeframes (not just the base one) here also
 # closes a separate gap: FreqAI's feature_engineering_expand_*() pulls
 # candles for every include_timeframes entry, which were never downloaded
-# for anything past the first one before this. Wrapped in "timeout" — see
-# DOWNLOAD_DATA_TIMEOUT_SECONDS above — since download-data has no
-# per-pair timeout of its own, and downloading a VolumePairList-driven
-# ".*/USDT" wildcard, freqtrade's own documented way to support a dynamic
-# pairlist in backtesting, really can mean every active USDT pair on the
+# for anything past the first one before this.
+#
+# Tries each of DATA_SOURCE_EXCHANGES in order — config.json's exchange.name
+# is rewritten via jq before every attempt, never pair_whitelist/pairlists,
+# so this can never make the bot actually trade on whichever source it
+# happened to download candles from. Each attempt is capped at its own
+# share of DOWNLOAD_DATA_TIMEOUT_SECONDS (see DOWNLOAD_DATA_ATTEMPT_TIMEOUT_SECONDS
+# above) rather than the full budget each, so falling back after the
+# primary source fails still fits the same overall window the reap cron
+# expects instead of potentially doubling the total wait. download-data has
+# no per-pair timeout of its own, and downloading a VolumePairList-driven
+# ".*/USDT" wildcard — freqtrade's own documented way to support a dynamic
+# pairlist in backtesting — really can mean every active USDT pair on the
 # exchange, not just the top N a live/dry-run instance would ever actually
-# pick.
-timeout ${DOWNLOAD_DATA_TIMEOUT_SECONDS} docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data ${FREQTRADE_DOCKER_IMAGE} \\
-  download-data --config user_data/config.json --timerange "$TIMERANGE" \\
-  --timeframes ${freqaiConfig.features.includeTimeframes.map((tf) => `"${shellEscapeDouble(tf)}"`).join(" ")} \\
-  --pairs ${downloadDataPairs.map((p) => `"${shellEscapeDouble(p)}"`).join(" ")} \\
-  2>&1 | tee -a "$TRAIN_LOG" || fail "historical data download failed (possibly timed out after ${DOWNLOAD_DATA_TIMEOUT_SECONDS}s — see last output below for the last pairs it reached)"
+# pick. Every attempt (which source, whether it succeeded) is logged
+# explicitly so a future failure shows exactly which data source(s) were
+# tried, not just a generic "failed".
+DOWNLOAD_OK=0
+for data_source in ${DATA_SOURCE_EXCHANGES.map((ds) => `"${shellEscapeDouble(ds)}"`).join(" ")}; do
+  echo "=== download-data: trying data source '$data_source' (timeout ${DOWNLOAD_DATA_ATTEMPT_TIMEOUT_SECONDS}s) ===" | tee -a "$TRAIN_LOG"
+  jq --arg name "$data_source" '.exchange.name = $name' user_data/config.json > user_data/config.json.tmp \\
+    && mv user_data/config.json.tmp user_data/config.json
+  if timeout ${DOWNLOAD_DATA_ATTEMPT_TIMEOUT_SECONDS} docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data ${FREQTRADE_DOCKER_IMAGE} \\
+    download-data --config user_data/config.json --timerange "$TIMERANGE" \\
+    --timeframes ${freqaiConfig.features.includeTimeframes.map((tf) => `"${shellEscapeDouble(tf)}"`).join(" ")} \\
+    --pairs ${downloadDataPairs.map((p) => `"${shellEscapeDouble(p)}"`).join(" ")} \\
+    2>&1 | tee -a "$TRAIN_LOG"; then
+    echo "=== download-data succeeded via '$data_source' ===" | tee -a "$TRAIN_LOG"
+    DOWNLOAD_OK=1
+    break
+  else
+    echo "=== download-data failed via '$data_source' ===" | tee -a "$TRAIN_LOG"
+  fi
+done
+[ "$DOWNLOAD_OK" -eq 1 ] || fail "historical data download failed against every data source (tried: ${DATA_SOURCE_EXCHANGES.join(", ")}) — see last output above for the last pairs reached"
 
 report_stage "TRAINING"
 docker run --rm -v /opt/freqtrade/user_data:/freqtrade/user_data ${FREQTRADE_DOCKER_IMAGE} \\
