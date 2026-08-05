@@ -134,6 +134,7 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
           uploadSessionId: data.uploadSessionId,
           files: data.files,
           completedAt: data.completedAt,
+          resolvedAutoSelectPairs: data.resolvedAutoSelectPairs,
         });
         setBackgroundFetchRegistration(null);
       }
@@ -325,13 +326,17 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
   // session). Only ever reachable once every file has uploaded
   // successfully, which is what guarantees no VPS/TrainingJob ever gets
   // created for a download that failed or was cancelled partway through.
-  async function submitPreloadedTraining(uploadSessionId: string, files: Array<{ pair: string; timeframe: string }>) {
+  async function submitPreloadedTraining(
+    uploadSessionId: string,
+    files: Array<{ pair: string; timeframe: string }>,
+    resolvedAutoSelectPairs?: string[],
+  ) {
     const data = await apiFetch<{ job: { id: string; status: TrainingStatus; createdAt: string } }>(
       "/api/train/cloud",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ botId: bot.id, uploadSessionId, preloadedFiles: files }),
+        body: JSON.stringify({ botId: bot.id, uploadSessionId, preloadedFiles: files, resolvedAutoSelectPairs }),
       },
     );
     onUpdate({
@@ -398,13 +403,13 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
 
       const controller = new AbortController();
       downloadAbortControllerRef.current = controller;
-      const { uploadSessionId, files } = await downloadAndUploadTrainingData(bot, {
+      const { uploadSessionId, files, resolvedAutoSelectPairs } = await downloadAndUploadTrainingData(bot, {
         signal: controller.signal,
         onProgress: (p) => setDownloadProgress({ completedTasks: p.completedTasks, totalTasks: p.totalTasks }),
       });
       downloadAbortControllerRef.current = null;
       setDownloadProgress(null);
-      await submitPreloadedTraining(uploadSessionId, files);
+      await submitPreloadedTraining(uploadSessionId, files, resolvedAutoSelectPairs);
     } catch (err) {
       // A cancel via the "Annuleren" button below aborts the controller,
       // which surfaces here as this specific error — no VPS/job was ever
@@ -443,7 +448,11 @@ export function BotCard({ bot, onUpdate, onDelete }: BotCardProps) {
     setError(null);
     setIsConfirmingBackgroundDownload(true);
     try {
-      await submitPreloadedTraining(pendingDownload.uploadSessionId, pendingDownload.files);
+      await submitPreloadedTraining(
+        pendingDownload.uploadSessionId,
+        pendingDownload.files,
+        pendingDownload.resolvedAutoSelectPairs,
+      );
       await clearPendingDownload(bot.id);
       setPendingDownload(null);
     } catch (err) {

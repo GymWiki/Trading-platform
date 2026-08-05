@@ -35,6 +35,15 @@ export interface DownloadTaskProgress {
 export interface PreloadedDataResult {
   uploadSessionId: string;
   files: Array<{ pair: string; timeframe: string }>;
+  /**
+   * Set only for an auto-select bot — the exact top-N-by-volume pairs
+   * resolved client-side (see resolvePairlist below), to be forwarded to
+   * POST /api/train/cloud so buildFreqAITrainingCloudInit can freeze the
+   * training run's pairlist to exactly these pairs instead of leaving
+   * VolumePairList to re-rank by volume again at backtest time — see that
+   * param's own doc comment in lib/hetzner.ts for why.
+   */
+  resolvedAutoSelectPairs?: string[];
 }
 
 export class ClientDataDownloadError extends Error {}
@@ -47,25 +56,31 @@ interface BotForDownload {
   freqaiConfig: FreqAIProfileConfig;
 }
 
-// Mirrors buildFreqAITrainingCloudInit's own downloadDataPairs union
-// exactly (auto-select's ".*/USDT" is expanded server-side inside
-// download-data itself in the classic path — here markets-proxy returns
-// that same expansion directly, since there's no regex-expansion step to
-// invoke client-side) — see DEFAULT_CORR_PAIRLIST's own doc comment for
-// why BTC/USDT is always unioned in regardless of mode.
-async function resolvePairlist(bot: BotForDownload, signal: AbortSignal): Promise<string[]> {
-  let pairs: string[];
+interface ResolvedPairlist {
+  /** Every pair to actually fetch/upload candles for — the trading-relevant pairs plus DEFAULT_CORR_PAIRLIST's correlation-only pair. */
+  downloadPairs: string[];
+  /** Set only for an auto-select bot — see PreloadedDataResult.resolvedAutoSelectPairs's own doc comment for why this is kept separate from downloadPairs. */
+  resolvedAutoSelectPairs?: string[];
+}
+
+// markets-proxy now returns the same top-N-by-volume pairlist a live
+// auto-select bot's VolumePairList would use (see AUTO_PAIRLIST_SIZE's own
+// doc comment in lib/hetzner.ts for why this used to be every active pair
+// on the exchange instead, and why that turned out to be impractical to
+// fetch client-side) — see DEFAULT_CORR_PAIRLIST's own doc comment for why
+// BTC/USDT is always unioned into downloadPairs regardless of mode.
+async function resolvePairlist(bot: BotForDownload, signal: AbortSignal): Promise<ResolvedPairlist> {
   if (bot.autoSelectCoins) {
     const data = await apiFetch<{ pairs: string[] }>(`/api/train/cloud/markets-proxy?botId=${encodeURIComponent(bot.id)}`, {
       signal,
     });
-    pairs = data.pairs;
-  } else {
-    pairs = bot.pairWhitelist
-      ? bot.pairWhitelist.split(",").map((p) => p.trim()).filter(Boolean)
-      : [];
+    return {
+      downloadPairs: Array.from(new Set([...data.pairs, ...DEFAULT_CORR_PAIRLIST])),
+      resolvedAutoSelectPairs: data.pairs,
+    };
   }
-  return Array.from(new Set([...pairs, ...DEFAULT_CORR_PAIRLIST]));
+  const pairs = bot.pairWhitelist ? bot.pairWhitelist.split(",").map((p) => p.trim()).filter(Boolean) : [];
+  return { downloadPairs: Array.from(new Set([...pairs, ...DEFAULT_CORR_PAIRLIST])) };
 }
 
 interface Task {
@@ -159,8 +174,8 @@ export async function downloadAndUploadTrainingData(
 ): Promise<PreloadedDataResult> {
   const { signal, onProgress } = opts;
 
-  const pairs = await resolvePairlist(bot, signal);
-  if (pairs.length === 0) {
+  const { downloadPairs, resolvedAutoSelectPairs } = await resolvePairlist(bot, signal);
+  if (downloadPairs.length === 0) {
     throw new ClientDataDownloadError("Geen coins geselecteerd om data voor op te halen.");
   }
 
@@ -168,7 +183,7 @@ export async function downloadAndUploadTrainingData(
   const timeframes = bot.freqaiConfig.features.includeTimeframes;
 
   const tasks: Task[] = [];
-  for (const pair of pairs) {
+  for (const pair of downloadPairs) {
     for (const timeframe of timeframes) {
       tasks.push({ pair, timeframe });
     }
@@ -226,5 +241,5 @@ export async function downloadAndUploadTrainingData(
     );
   }
 
-  return { uploadSessionId, files: uploadedFiles };
+  return { uploadSessionId, files: uploadedFiles, resolvedAutoSelectPairs };
 }

@@ -64,19 +64,36 @@ async function withDataSourceFallback<T>(fn: (exchange: Exchange) => Promise<T>)
   throw new MarketDataError(`Every data source failed (tried: ${DATA_SOURCE_EXCHANGES.join(", ")}): ${message}`);
 }
 
-// Mirrors buildPairlistConfig's auto-select branch in lib/hetzner.ts
-// (VolumePairList against ".*/USDT") — every active USDT spot market,
-// since that wildcard is what freqtrade's own download-data expands it
-// into server-side too (see DEFAULT_CORR_PAIRLIST / DATA_SOURCE_EXCHANGE's
-// doc comments for the full reasoning already established for the VM-side
-// download).
-export async function fetchTradableStakePairs(): Promise<MarketDataResult<string[]>> {
+// Ranks by 24h quoteVolume and takes the top `limit` — mirrors exactly
+// what VolumePairList (sort_key: "quoteVolume", number_assets:
+// AUTO_PAIRLIST_SIZE) hands to FreqAI for a live auto-select bot, see
+// buildPairlistConfig in lib/hetzner.ts. This used to just return EVERY
+// active USDT spot market (matching the classic VM-side download-data
+// step's own ".*/USDT" regex expansion) — in practice that meant 700+
+// files / 12,000+ background-fetch requests for a single bot, which is
+// impractical to pull client-side regardless of Background Fetch or the
+// foreground fallback. buildFreqAITrainingCloudInit's resolvedAutoSelectPairs
+// param is what makes this safe: the training run's pairlist gets frozen
+// to exactly this resolved top-N (a StaticPairList) rather than leaving
+// VolumePairList to re-rank by volume again at backtest time, so there's
+// no risk of the VM wanting data for a pair this function didn't return.
+export async function fetchTopVolumeStakePairs(limit: number): Promise<MarketDataResult<string[]>> {
   return withDataSourceFallback(async (exchange) => {
     const markets = await exchange.loadMarkets();
-    return Object.values(markets)
-      .filter((m) => m && m.spot && m.active !== false && m.quote === STAKE_CURRENCY)
-      .map((m) => m!.symbol)
-      .sort();
+    const stakePairs = new Set(
+      Object.values(markets)
+        .filter((m) => m && m.spot && m.active !== false && m.quote === STAKE_CURRENCY)
+        .map((m) => m!.symbol),
+    );
+    if (!exchange.has["fetchTickers"]) {
+      throw new MarketDataError(`${exchange.id} does not support fetchTickers, cannot rank pairs by volume`);
+    }
+    const tickers = await exchange.fetchTickers();
+    return Object.values(tickers)
+      .filter((t): t is typeof t & { symbol: string } => !!t?.symbol && stakePairs.has(t.symbol))
+      .sort((a, b) => (b.quoteVolume ?? 0) - (a.quoteVolume ?? 0))
+      .slice(0, limit)
+      .map((t) => t.symbol);
   });
 }
 

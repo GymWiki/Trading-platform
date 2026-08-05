@@ -39,6 +39,8 @@ interface StartCloudTrainingParams {
    * exact path rather than trusting that the objects exist.
    */
   preloadedData?: { uploadSessionId: string; files: Array<{ pair: string; timeframe: string }> };
+  /** Only meaningful together with preloadedData when bot.autoSelectCoins is true — see that param's own doc comment on buildFreqAITrainingCloudInit in lib/hetzner.ts. */
+  resolvedAutoSelectPairs?: string[];
 }
 
 // Mints signed GET URLs for every uploaded training-data file so the VM can
@@ -85,7 +87,12 @@ async function resolvePreloadedDataUrls(
 // the bot is currently deployed — paper or live, both actually run the
 // freqtrade loop — it is genuinely paused (via its own freqtrade REST API,
 // not just a database flag) before any training bookkeeping happens.
-export async function startCloudTrainingJob({ bot, cancelOpenOrders = false, preloadedData }: StartCloudTrainingParams) {
+export async function startCloudTrainingJob({
+  bot,
+  cancelOpenOrders = false,
+  preloadedData,
+  resolvedAutoSelectPairs,
+}: StartCloudTrainingParams) {
   const activeJob = await prisma.trainingJob.findFirst({
     where: { botId: bot.id, status: { in: ["QUEUED", "TRAINING"] } },
   });
@@ -177,6 +184,7 @@ export async function startCloudTrainingJob({ bot, cancelOpenOrders = false, pre
       callbackToken,
       hetznerApiToken,
       preloadedData: preloadedFileUrls,
+      resolvedAutoSelectPairs,
     });
 
     // Explicit markers either side of the one call that actually leaves

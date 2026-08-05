@@ -39,6 +39,14 @@ const startTrainingSchema = z
       .array(z.object({ pair: z.string().min(1), timeframe: z.string().min(1) }))
       .min(1)
       .optional(),
+    // Only meaningful for an auto-select bot — see that param's own doc
+    // comment on buildFreqAITrainingCloudInit (lib/hetzner.ts) for why this
+    // freezes the training run's pairlist to exactly these pairs instead
+    // of leaving VolumePairList to re-rank by volume again at backtest
+    // time. Harmless to send for a manual/static bot: startCloudTrainingJob
+    // only ever applies it when the bot's own (server-trusted)
+    // autoSelectCoins is true, never based on this request body alone.
+    resolvedAutoSelectPairs: z.array(z.string().min(1)).optional(),
   })
   .refine((v) => !!v.uploadSessionId === !!v.preloadedFiles, {
     message: "uploadSessionId and preloadedFiles must be provided together",
@@ -55,7 +63,7 @@ export const POST = withErrorHandling(async (req: NextRequest) => {
 
   const parsed = await parseJsonBody(req, startTrainingSchema);
   if ("error" in parsed) return parsed.error;
-  const { botId, cancelOpenOrders = false, uploadSessionId, preloadedFiles } = parsed.data;
+  const { botId, cancelOpenOrders = false, uploadSessionId, preloadedFiles, resolvedAutoSelectPairs } = parsed.data;
 
   const bot = await prisma.botConfiguration.findUnique({ where: { id: botId } });
   if (!bot || bot.userId !== user.id) {
@@ -70,6 +78,7 @@ export const POST = withErrorHandling(async (req: NextRequest) => {
       bot,
       cancelOpenOrders,
       preloadedData: uploadSessionId && preloadedFiles ? { uploadSessionId, files: preloadedFiles } : undefined,
+      resolvedAutoSelectPairs,
     });
     return NextResponse.json({ job }, { status: 201 });
   } catch (err) {

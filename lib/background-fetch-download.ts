@@ -18,14 +18,17 @@ const KLINES_PAGE_LIMIT = 1000;
 
 // Background Fetch hands every request to the OS-level download manager
 // up front — a reasonable design for a modest number of sizeable
-// downloads (its actual target use case), not for the thousands of small
-// JSON calls an auto-select bot with a large pairlist could produce here
-// (every active USDT pair on the exchange × every include_timeframes entry
-// × dozens of pages each). Past this cap, isBackgroundFetchWorthwhile
+// downloads (its actual target use case), not for an unbounded number of
+// small JSON calls. resolvePairlist below now ranks auto-select pairs by
+// volume and caps at AUTO_PAIRLIST_SIZE (30, see that constant's own doc
+// comment in lib/hetzner.ts for why this used to be every active pair on
+// the exchange instead — up to 12,000+ requests for one bot in practice),
+// so the realistic worst case is now ~30 pairs × a couple of
+// include_timeframes entries × dozens of pages each — comfortably in the
+// low thousands, not five figures. Past this cap, isBackgroundFetchWorthwhile
 // below says no and the caller (components/BotCard.tsx) falls back to the
-// foreground path instead of handing the browser a five-figure request
-// queue.
-export const MAX_BACKGROUND_FETCH_REQUESTS = 500;
+// foreground path instead.
+export const MAX_BACKGROUND_FETCH_REQUESTS = 2000;
 
 export interface PlannedRequest {
   url: string;
@@ -45,11 +48,19 @@ interface BotForPlan {
   freqaiConfig: FreqAIProfileConfig;
 }
 
-// Mirrors lib/client-data-download.ts's resolvePairlist exactly — kept as
-// a separate copy (rather than a shared import) only because that file
-// also owns the foreground-specific Task/worker-pool types; the logic
-// itself must stay identical, since both paths have to agree on which
-// pairs get downloaded for the same bot.
+// Mirrors lib/client-data-download.ts's resolvePairlist pair resolution
+// (top-N-by-volume via markets-proxy for auto-select, or the bot's own
+// pairWhitelist for manual/static — see AUTO_PAIRLIST_SIZE's own doc
+// comment in lib/hetzner.ts) — kept as a separate copy (rather than a
+// shared import) only because that file also owns the
+// foreground-specific Task/worker-pool types; the pair resolution itself
+// must stay identical, since both paths have to agree on which pairs get
+// downloaded for the same bot. Doesn't need to separately track/return
+// which pairs came from auto-select vs DEFAULT_CORR_PAIRLIST the way that
+// file does — public/sw.js's backgroundfetchsuccess handler derives that
+// split itself from the completed downloads directly (see its own doc
+// comment), since there's no way to run JS here again once a fetch
+// finishes in the background.
 async function resolvePairlist(bot: BotForPlan): Promise<string[]> {
   let pairs: string[];
   if (bot.autoSelectCoins) {

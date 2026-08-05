@@ -412,8 +412,15 @@ const DOWNLOAD_DATA_ATTEMPT_TIMEOUT_SECONDS = Math.max(
 // How many of the exchange's top-liquid USDT markets VolumePairList hands
 // to FreqAI when auto-select is on — wide enough for the AI to find real
 // opportunities, small enough that feature engineering/backtesting for a
-// single training run stays bounded.
-const AUTO_PAIRLIST_SIZE = 30;
+// single training run stays bounded. Exported so
+// lib/market-data-client.ts's fetchTopVolumeStakePairs (behind
+// GET /api/train/cloud/markets-proxy) resolves the SAME size client-side —
+// downloading literally every active pair on the exchange for auto-select
+// bots turned out to mean 700+ files / 12,000+ background-fetch requests
+// for one bot in practice, so the client-side pre-fetch now ranks by
+// 24h quoteVolume and takes only this many, matching what VolumePairList
+// itself would hand to FreqAI anyway.
+export const AUTO_PAIRLIST_SIZE = 30;
 
 // The taker fee freqtrade uses to simulate costs during backtesting/
 // dry-run (config's top-level "fee" key — see EXCHANGE_PRESETS for the
@@ -772,6 +779,25 @@ interface TrainingCloudInitParams {
    */
   preloadedData?: Array<{ pair: string; timeframe: string; downloadUrl: string }>;
   /**
+   * Only meaningful together with preloadedData and autoSelectCoins — the
+   * exact top-N-by-volume pairs lib/background-fetch-download.ts /
+   * lib/client-data-download.ts actually resolved and downloaded data for
+   * client-side (see their own resolvePairlist, which now ranks by
+   * quoteVolume via /api/train/cloud/markets-proxy instead of returning
+   * every active pair on the exchange — downloading literally every active
+   * pair turned out to mean 700+ files / 12,000+ background-fetch
+   * requests for one bot in practice). When present, this REPLACES the
+   * normal VolumePairList config with a StaticPairList pinned to exactly
+   * these pairs, rather than leaving VolumePairList to re-rank by volume
+   * again at backtest time — otherwise a pair that moved in or out of the
+   * live top-N between prefetch and backtest would have no local data file
+   * and fail the run. Freezing the pairlist to what was actually
+   * downloaded is a non-issue for a point-in-time backtest/training run
+   * (unlike live trading, which keeps using genuine dynamic VolumePairList
+   * — see buildFreqtradeCloudInit, a different function entirely).
+   */
+  resolvedAutoSelectPairs?: string[];
+  /**
    * Hard ceiling on the whole run; a `timeout`-triggered kill still fires
    * the self-destruct trap. Must stay comfortably above
    * DOWNLOAD_DATA_TIMEOUT_SECONDS alone (2h by default) plus real room for
@@ -820,6 +846,7 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
     // for why this is generously over-provisioned rather than a tight fit.
     timerangeDays = computeTrainingTimerangeDays(freqaiConfig),
     preloadedData,
+    resolvedAutoSelectPairs,
     // Was 4h — raised alongside DOWNLOAD_DATA_QUEUE_TIMEOUT_MINUTES's default
     // (2h) so a download that legitimately uses its full allowance still
     // has real room left over for PULLING_IMAGE/TRAINING/UPLOADING
@@ -831,7 +858,13 @@ export function buildFreqAITrainingCloudInit(params: TrainingCloudInitParams): s
   assertSafePythonIdentifier(strategy, "strategy");
 
   const safeBotName = botName.toLowerCase().replace(/[^a-z0-9-]/g, "-");
-  const pairlistConfig = buildPairlistConfig(autoSelectCoins, pairWhitelist);
+  // See resolvedAutoSelectPairs's own doc comment above for why this
+  // freezes to a StaticPairList instead of buildPairlistConfig's normal
+  // VolumePairList whenever it's given.
+  const pairlistConfig: PairlistConfig =
+    autoSelectCoins && resolvedAutoSelectPairs && resolvedAutoSelectPairs.length > 0
+      ? { pair_whitelist: resolvedAutoSelectPairs, pairlists: [{ method: "StaticPairList" }] }
+      : buildPairlistConfig(autoSelectCoins, pairWhitelist);
 
   // download-data only fetches config["pairs"], which freqtrade defaults to
   // exchange.pair_whitelist when no --pairs override is given (see

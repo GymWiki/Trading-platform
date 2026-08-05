@@ -125,7 +125,22 @@ async function handleBackgroundFetchSuccess(bgFetch) {
     if (ok) uploadedFiles.push({ pair, timeframe });
   }
 
-  const record = { botId, uploadSessionId, files: uploadedFiles, completedAt: Date.now() };
+  // Mirrors DEFAULT_CORR_PAIRLIST in lib/training-timerange.ts — this
+  // service worker has no access to that TS module (see this file's own
+  // doc comment for why), so the one fixed correlation-only pair it adds
+  // is hardcoded here instead. Derived rather than threaded through
+  // separately: lib/background-fetch-download.ts's request plan never
+  // tags which pairs came from auto-select vs. this addition, but every
+  // distinct pair actually downloaded already appears in uploadedFiles, so
+  // subtracting this one known pair recovers exactly the auto-select
+  // pairlist — see resolvedAutoSelectPairs's own doc comment in
+  // lib/hetzner.ts for what this feeds into and why.
+  const CORRELATION_ONLY_PAIRS = ["BTC/USDT"];
+  const resolvedAutoSelectPairs = Array.from(new Set(uploadedFiles.map((f) => f.pair))).filter(
+    (p) => !CORRELATION_ONLY_PAIRS.includes(p),
+  );
+
+  const record = { botId, uploadSessionId, files: uploadedFiles, completedAt: Date.now(), resolvedAutoSelectPairs };
   await storePendingDownload(record);
 
   // Customizes the mandatory system notification Background Fetch already

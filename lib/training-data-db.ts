@@ -14,6 +14,16 @@ export interface PendingDownload {
   uploadSessionId: string;
   files: Array<{ pair: string; timeframe: string }>;
   completedAt: number;
+  /**
+   * Set by public/sw.js's backgroundfetchsuccess handler for an
+   * auto-select bot — the distinct pairs actually downloaded, minus
+   * DEFAULT_CORR_PAIRLIST's correlation-only pair (derived there, not
+   * threaded through separately — see that handler's own doc comment).
+   * Forwarded to POST /api/train/cloud so buildFreqAITrainingCloudInit can
+   * freeze the training run's pairlist to exactly these pairs — see that
+   * param's own doc comment in lib/hetzner.ts for why.
+   */
+  resolvedAutoSelectPairs?: string[];
 }
 
 function openDb(): Promise<IDBDatabase> {
